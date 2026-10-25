@@ -1,0 +1,7 @@
+{
+  "name": "wnp-userscript-tests",
+  "private": true,
+  "description": "Pruebas del userscript tools/youtube_saltar_anuncios.user.js",
+  "scripts": { "test": "node test_userscript.js" },
+  "devDependencies": { "jsdom": "^30.0.0" }
+}

@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Empaquetado
+build/
+dist/
+*.exe
+*.egg-info/
+
+# Datos de usuario y secretos: NUNCA al repositorio
+config.json
+history.json
+history.json.*
+anuncios.csv
+ad_rules.json
+error.log
+*.log
+.env
+.env.*
+*.key
+*.pem
+diagnostico_*.txt
+estado.json
+ultima-comprobacion.txt
+
+# Pruebas de userscript (Node)
+node_modules/
+package-lock.json
+
+# Sistema / editores
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/

@@ -1,0 +1,16 @@
+# Versiones verificadas contra PyPI el 2026-10-25 (últimas publicadas).
+#   PyQt6 6.11.0 (trae PyQt6-Qt6 6.11.2 y PyQt6-sip 13.13.0)
+#   pywnp 2.0.2 (sigue siendo la última: pywnp_patch.py sigue haciendo falta)
+#   aiohttp 3.14.5 (dependencia de pywnp; se lista para que PyInstaller/pip la fijen)
+#   winsdk 1.0.0b10 (solo Windows; sigue siendo la última, solo existen betas)
+PyQt6>=6.11,<7
+pywnp>=2.0.2,<2.1
+aiohttp>=3.14.5
+
+# Solo necesario en Windows: permite leer también reproductores de escritorio
+# (Spotify, etc.) a través de las sesiones multimedia nativas de Windows.
+# OJO: en PyPI winsdk solo tiene versiones beta (la última es 1.0.0b10).
+# El requisito anterior "winsdk>=1.0.0" NO lo cumple ninguna versión publicada
+# (1.0.0b10 < 1.0.0 según PEP 440), así que `pip install -r requirements.txt`
+# fallaba en Windows con "No matching distribution found".
+winsdk>=1.0.0b10; sys_platform == "win32"
