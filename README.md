@@ -4,7 +4,7 @@
 
 **Reproductor de escritorio para Windows que muestra y controla lo que suena en tu navegador y en Spotify.**
 
-Hecho con PyQt6 · Creado por **[YefriDev](https://github.com/TU-USUARIO)**
+Hecho con PyQt6 · Creado por **[YefriDev](https://github.com/Yeflix)**
 
 ![Licencia](https://img.shields.io/badge/licencia-GPL--3.0-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-3776AB)
