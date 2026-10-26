@@ -57,7 +57,7 @@ WNP Player **no reproduce audio por sí mismo**: lee el estado de lo que ya suen
 ## Instalación
 
 ```bash
-git clone https://github.com/TU-USUARIO/wnp-player.git
+git clone https://github.com/Yeflix/wnp-player.git
 cd wnp-player
 pip install -r requirements.txt
 python main.py                 # usa el puerto de la última sesión (por defecto 1234)
@@ -145,7 +145,7 @@ Lista completa en la [documentación](docs/DOCUMENTACION.md#17-limitaciones-cono
 
 ## Créditos
 
-- **Autor:** [YefriDev](https://github.com/TU-USUARIO)
+- **Autor:** [YefriDev](https://github.com/Yeflix)
 - [pywnp](https://pypi.org/project/pywnp/) de keifufu (MIT) y la extensión [WebNowPlaying](https://wnp.keifufu.dev).
 - [PyQt6](https://www.riverbankcomputing.com/software/pyqt/) (GPL-3.0), [aiohttp](https://github.com/aio-libs/aiohttp) y [winsdk](https://pypi.org/project/winsdk/).
 - Letras: [lrclib.net](https://lrclib.net).
