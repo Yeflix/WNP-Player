@@ -727,8 +727,13 @@ class DockWindow(QWidget):
     def _sync_lyrics(self):
         """Aplica el modo letra: visibilidad del panel y datos de la canción."""
         on = self._lyrics_mode and self._style == "card" and self.lyrics_panel is not None
-        for w in (self.cover, self.title_label, self.artist_label):
-            w.setVisible(not on and self._style == "card")
+        # La carátula grande solo existe en el estilo tarjeta (el compacto usa
+        # cover_small). Título y artista se ven en AMBOS estilos; solo los
+        # tapa la letra. Antes se ocultaban también en el compacto y la barra
+        # quedaba con un hueco vacío donde va el nombre de la canción.
+        self.cover.setVisible(not on and self._style == "card")
+        for w in (self.title_label, self.artist_label):
+            w.setVisible(not on)
         self.bar_mic_btn.set_active(on)
         self.bar_mic_btn.setToolTip("Ocultar la letra" if on else "Mostrar la letra")
         if self.lyrics_panel is None:

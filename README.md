@@ -4,8 +4,9 @@
 
 **Reproductor de escritorio para Windows que muestra y controla lo que suena en tu navegador y en Spotify.**
 
-Hecho con PyQt6 · Creado por **[YefriDev](https://github.com/Yeflix)**
+Hecho con PyQt6 · Creado por **[YefriDev](https://github.com/TU-USUARIO)**
 
+![Versión](https://img.shields.io/badge/versi%C3%B3n-1.1.0-success)
 ![Licencia](https://img.shields.io/badge/licencia-GPL--3.0-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-3776AB)
 ![Plataforma](https://img.shields.io/badge/plataforma-Windows-0078D6)
@@ -34,6 +35,7 @@ WNP Player **no reproduce audio por sí mismo**: lee el estado de lo que ya suen
 - **Scrobbling** a Last.fm o ListenBrainz (opcional).
 - **Filtro de anuncios de Spotify:** no ensucian el historial ni las estadísticas.
 - **Teclas globales**, bandeja del sistema y notificaciones.
+- **Inicia con Windows** (activado por defecto; se desactiva en Configuración o en el asistente de bienvenida).
 - **Dos aspectos:** predeterminado y *Cosmos*; accesibilidad (tamaño de letra, alto contraste, reducir movimiento) y escala automática según la resolución.
 - Si no hay ningún reproductor abierto, pulsar **play** abre Spotify o YouTube.
 
@@ -41,6 +43,7 @@ WNP Player **no reproduce audio por sí mismo**: lee el estado de lo que ya suen
 <summary>Más capturas</summary>
 
 <img src="docs/img/compacta.png" alt="Ventana compacta"><br>
+<img src="docs/img/bienvenida.png" width="300" alt="Asistente de bienvenida"><br>
 <img src="docs/img/panel-tarjeta.png" width="220" alt="Panel lateral, estilo tarjeta"> <img src="docs/img/panel-compacto.png" width="320" alt="Panel lateral, estilo compacto">
 
 </details>
@@ -70,11 +73,22 @@ pip install pyinstaller
 pyinstaller main.spec
 ```
 
+## Actualizar desde una versión anterior
+
+1. Cierra WNP Player (clic derecho en el ícono de la bandeja → Salir).
+2. Descarga la versión nueva desde **Releases**.
+   - **Con `.exe`:** reemplaza el ejecutable viejo por el nuevo.
+   - **Desde el código:** `git pull` y `pip install -r requirements.txt --upgrade`.
+3. Ábrelo. Tu configuración, historial y estadísticas se conservan: viven en `%LOCALAPPDATA%\WNPPlayer`, fuera de la carpeta del programa.
+
+Si tenías «Iniciar con Windows» activado y moviste el `.exe` a otra carpeta, la entrada se corrige sola al abrirlo. Los cambios de cada versión están en [`CHANGELOG.md`](CHANGELOG.md).
+
 ## Privacidad y seguridad
 
 - El servidor de la extensión y el puente del tema de Spotify escuchan **solo en `127.0.0.1`**.
 - Tus datos se guardan en `%LOCALAPPDATA%\WNPPlayer` (configuración, historial, registro de anuncios). **Nada de eso forma parte de este repositorio.**
 - `config.json` guarda **en texto plano** las claves y tokens que tú configures (Spotify, Google, Last.fm, ListenBrainz). No lo compartas ni lo subas a ningún sitio.
+- «Iniciar con Windows» solo crea una entrada por-usuario en `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` (sin permisos de administrador); desactivarlo la elimina.
 - Esto es lo único que sale de tu equipo, y solo si activas cada función: artista/título/álbum/duración a lrclib.net (letras); lo que escuchas a Last.fm/ListenBrainz (scrobbling); la autorización a Spotify/Google (me gusta).
 - Las credenciales del botón "me gusta" son **de tu propia app** de desarrollador (developer.spotify.com / Google Cloud); este proyecto no incluye ninguna.
 

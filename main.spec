@@ -57,6 +57,10 @@ a = Analysis(
         'PyQt6.QtGui',
         'PyQt6.QtWidgets',
         'PyQt6.sip', # Esencial para la gestión de memoria de PyQt6
+        # "Iniciar con Windows": autostart.py se importa dentro de funciones y
+        # usa winreg (solo Windows); se declaran para que el .exe los incluya.
+        'autostart',
+        'winreg',
     ] + pyqt6_submodules + _extra_hiddenimports,
     hookspath=[],
     hooksconfig={},

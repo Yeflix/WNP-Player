@@ -47,6 +47,7 @@ class AppConfig:
     mini_x: int | None = None
     mini_y: int | None = None
 
+    start_with_windows: bool = True      # iniciar junto con Windows (ver autostart.py)
     start_minimized: bool = False
 
     hotkeys_enabled: bool = False
@@ -153,6 +154,11 @@ class AppConfig:
             raw = json.loads(path.read_text(encoding="utf-8"))
             valid_fields = {f.name for f in dataclasses.fields(cls)}
             filtered = {k: v for k, v in raw.items() if k in valid_fields}
+            # Actualización desde 1.0: ese config no conoce "start_with_windows".
+            # Quien ya usaba el programa no pidió el inicio automático, así que
+            # no se le activa en silencio (en instalaciones nuevas sí es True).
+            if "start_with_windows" not in raw and raw.get("onboarding_completed"):
+                filtered["start_with_windows"] = False
             return cls(**cls._sanitize(filtered))
         except Exception:
             return cls()

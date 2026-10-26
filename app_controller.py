@@ -140,6 +140,10 @@ class AppController(QObject):
         if self.config.spotify_theme_enabled:
             self.theme_bridge.start()
         self._autosave_timer.start()
+        # En cada arranque el registro se alinea con la configuración (por
+        # defecto: activado). Así el .exe, al moverlo de carpeta, corrige solo
+        # su ruta de inicio.
+        self._apply_start_with_windows(self.config.start_with_windows)
 
         if not self.config.onboarding_completed:
             # Primera ejecución (da igual si es `python main.py` o el
@@ -164,6 +168,15 @@ class AppController(QObject):
         # fundido de entrada de la ventana recién abierta.
         QTimer.singleShot(3000, self._maybe_show_weekly_recap)
 
+    def _apply_start_with_windows(self, enabled: bool):
+        """Aplica "Iniciar con Windows" al registro y guarda lo que quedó
+        realmente (si el registro falla, la casilla no miente)."""
+        import autostart
+        if autostart.is_supported():
+            autostart.sync(enabled)
+            enabled = autostart.is_enabled()
+        self.config.start_with_windows = bool(enabled)
+
     def _maybe_show_weekly_recap(self):
         """Como mucho una vez por semana (ver stats.should_show_weekly_recap),
         y nunca en la primerísima ejecución (todavía no hay nada que
@@ -187,9 +200,13 @@ class AppController(QObject):
         self._weekly_recap_toast = toast  # referencia viva, evita que el GC lo cierre antes de tiempo
 
     def _run_onboarding(self):
-        wizard = WelcomeWizard(port=self.backend.port, initial_mode=self._current_mode)
+        wizard = WelcomeWizard(
+            port=self.backend.port, initial_mode=self._current_mode,
+            start_with_windows=self.config.start_with_windows,
+        )
         wizard.exec()  # modal: bloquea hasta "Empezar a usar..." u "Omitir"
 
+        self._apply_start_with_windows(wizard.result_start_with_windows)
         self._current_mode = wizard.result_default_mode
         self.config.last_mode = self._current_mode
         self.config.onboarding_completed = True
@@ -208,9 +225,11 @@ class AppController(QObject):
         alguien reabría la guía solo para repasar la parte de la
         extensión, por ejemplo."""
         wizard = WelcomeWizard(
-            port=self.backend.port, parent=self.main_window, initial_mode=self._current_mode
+            port=self.backend.port, parent=self.main_window, initial_mode=self._current_mode,
+            start_with_windows=self.config.start_with_windows,
         )
         wizard.exec()
+        self._apply_start_with_windows(wizard.result_start_with_windows)
         self._current_mode = wizard.result_default_mode
         self.config.last_mode = self._current_mode
         self.config.save()
@@ -569,6 +588,7 @@ class AppController(QObject):
             self.main_window.set_lyrics_panel_enabled(dlg.result_lyrics_panel_enabled)
             self._apply_window_opacity(dlg.result_window_opacity)
             cfg.start_minimized = dlg.result_start_minimized
+            self._apply_start_with_windows(dlg.result_start_with_windows)
             cfg.notifications_enabled = dlg.result_notifications
             cfg.empty_play_action = dlg.result_empty_play_action
             self._apply_play_idle_setting()

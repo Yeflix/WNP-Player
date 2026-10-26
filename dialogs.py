@@ -126,6 +126,9 @@ def _int_validator():
     return QIntValidator(1, 65535)
 
 
+from version import APP_VERSION, AUTHOR
+
+
 class AboutDialog(_DialogBase):
     def __init__(self, port: int, parent=None):
         super().__init__(parent, title="Acerca de")
@@ -142,6 +145,7 @@ class AboutDialog(_DialogBase):
             "Reproductor de escritorio independiente que usa el protocolo "
             "WebNowPlaying para leer y controlar la reproducción de música "
             "desde el navegador (YouTube, Spotify y otros sitios compatibles).\n\n"
+            f"Versión {APP_VERSION} · desarrollado por {AUTHOR}.\n"
             f"Servidor escuchando en el puerto {port}.\n\n"
             "Instala la extensión 'WebNowPlaying' en tu navegador y agrega "
             "este puerto como adaptador personalizado para conectarte."
@@ -939,6 +943,7 @@ class SettingsDialog(_DialogBase):
         self.result_spotify_theme_mode = ""
         self.result_port = backend_port
         self.result_always_on_top = config.always_on_top
+        self.result_start_with_windows = getattr(config, "start_with_windows", True)
         self.result_start_minimized = config.start_minimized
         self.result_notifications = config.notifications_enabled
         self.result_empty_play_action = getattr(config, "empty_play_action", "ask")
@@ -1006,6 +1011,12 @@ class SettingsDialog(_DialogBase):
         self.port_input = QLineEdit(str(backend_port))
         self.port_input.setValidator(_int_validator())
         layout.addWidget(self.port_input)
+
+        self.start_with_windows_check = QCheckBox("Iniciar con Windows")
+        self.start_with_windows_check.setChecked(getattr(config, "start_with_windows", True))
+        self.start_with_windows_check.setToolTip(
+            "Abre WNP Player automáticamente al iniciar sesión en Windows.")
+        layout.addWidget(self.start_with_windows_check)
 
         self.always_on_top_check = QCheckBox("Siempre visible")
         self.always_on_top_check.setChecked(config.always_on_top)
@@ -1474,6 +1485,7 @@ class SettingsDialog(_DialogBase):
             port = self.result_port
         self.result_port = port
         self.result_always_on_top = self.always_on_top_check.isChecked()
+        self.result_start_with_windows = self.start_with_windows_check.isChecked()
         self.result_start_minimized = self.start_minimized_check.isChecked()
         self.result_notifications = self.notifications_check.isChecked()
         self.result_empty_play_action = self.empty_play_combo.currentData()

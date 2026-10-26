@@ -8,7 +8,8 @@ la forma de arrancar). Cuatro pasos:
 2. Modos disponibles (completo / compacto), con una vista previa
    esquemática de cada uno, y elegir cuál abrir por defecto.
 3. Cómo instalar y configurar la extensión del navegador WebNowPlaying.
-4. Confirmación / resumen antes de empezar a usarlo.
+4. Confirmación / resumen antes de empezar a usarlo, con la opción de
+   iniciar el programa junto con Windows (activada por defecto).
 
 No depende de ningún archivo de imagen externo (igual que el resto de la
 app): el ícono se genera con `app_icon.build_app_icon()` y las vistas
@@ -23,7 +24,7 @@ from PyQt6.QtCore import (
 from PyQt6.QtGui import QDesktopServices, QPainter, QColor, QLinearGradient
 from PyQt6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QWidget,
-    QStackedWidget, QFrame, QSizePolicy, QGraphicsOpacityEffect,
+    QStackedWidget, QFrame, QSizePolicy, QGraphicsOpacityEffect, QCheckBox,
 )
 
 from theme import Palette, FONT_BODY
@@ -50,6 +51,49 @@ def _label(text, size=11.5, color=Palette.TEXT_DIM, weight=400, wrap=True):
         f"font-weight: {w}; background: transparent;"
     )
     return lbl
+
+
+DEVELOPER_NAME = "YefriDev"
+
+
+class _DeveloperCard(QFrame):
+    """Firma del desarrollador: círculo con degradado + nombre. Se usa en la
+    bienvenida y en el cierre del asistente."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("devCard")
+        a, b = Palette.ACCENT_A, Palette.ACCENT_B
+        self.setStyleSheet(
+            "QFrame#devCard { background: rgba(255,255,255,0.045); "
+            "border: 1px solid rgba(255,255,255,0.09); border-radius: 12px; }"
+        )
+        row = QHBoxLayout(self)
+        row.setContentsMargins(12, 9, 14, 9)
+        row.setSpacing(11)
+
+        badge = QLabel(DEVELOPER_NAME[0])
+        badge.setFixedSize(34, 34)
+        badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        badge.setStyleSheet(
+            f"background: qlineargradient(x1:0,y1:0,x2:1,y2:1, "
+            f"stop:0 rgb{a}, stop:1 rgb{b}); color: white; border-radius: 17px; "
+            f"font-family:'{FONT_BODY}'; font-size: 15px; font-weight: 700;"
+        )
+        row.addWidget(badge)
+
+        col = QVBoxLayout()
+        col.setSpacing(1)
+        name = QLabel(f"Desarrollado por <b>{DEVELOPER_NAME}</b>")
+        name.setTextFormat(Qt.TextFormat.RichText)
+        name.setStyleSheet(
+            f"color: rgb{Palette.TEXT}; font-family:'{FONT_BODY}'; font-size: 12px; "
+            f"background: transparent;"
+        )
+        col.addWidget(name)
+        col.addWidget(_label("Proyecto de código abierto · GPL-3.0", size=10,
+                             color=Palette.TEXT_FAINT, wrap=False))
+        row.addLayout(col, 1)
 
 
 class _ModePreview(QWidget):
@@ -279,10 +323,11 @@ class WelcomeWizard(_DialogBase):
     Uso:
         wizard = WelcomeWizard(port=1234)
         wizard.exec()
-        modo = wizard.result_default_mode   # "main" | "mini"
+        modo = wizard.result_default_mode   # "main" | "mini" | "dock"
     """
 
-    def __init__(self, port: int, parent=None, initial_mode: str = "main"):
+    def __init__(self, port: int, parent=None, initial_mode: str = "main",
+                 start_with_windows: bool = True):
         # Alto FIJO en vez de recalcularlo por página (adjustSize()) — con
         # QStackedWidget, Qt se resiste a ENCOGER la ventana entre páginas
         # aunque la página actual necesite menos (es la causa real del
@@ -296,6 +341,8 @@ class WelcomeWizard(_DialogBase):
         self.port = port
         self.result_default_mode = initial_mode if initial_mode in ("main", "mini", "dock") else "main"
         self._initial_mode = self.result_default_mode
+        self.result_start_with_windows = bool(start_with_windows)
+        self._initial_start_with_windows = self.result_start_with_windows
         self._page_index = 0
 
         outer = QVBoxLayout(self)
@@ -348,13 +395,13 @@ class WelcomeWizard(_DialogBase):
     def _build_page_welcome(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(4, 6, 4, 4)
-        layout.setSpacing(12)
+        layout.setContentsMargins(4, 2, 4, 4)
+        layout.setSpacing(11)
 
         icon_row = QHBoxLayout()
         icon_row.addStretch(1)
         icon_label = QLabel()
-        icon_label.setPixmap(build_app_icon(96).pixmap(72, 72))
+        icon_label.setPixmap(build_app_icon(96).pixmap(64, 64))
         icon_row.addWidget(icon_label)
         icon_row.addStretch(1)
         layout.addLayout(icon_row)
@@ -364,20 +411,18 @@ class WelcomeWizard(_DialogBase):
         layout.addWidget(title)
 
         body = _label(
-            "Es un reproductor de escritorio independiente (no necesita "
-            "Rainmeter) que controla la música que suena en tu navegador — "
-            "YouTube, Spotify web, SoundCloud, Twitch, Apple Music, Deezer, "
-            "Tidal — y, en Windows, también apps de escritorio nativas como "
-            "Spotify.",
+            "Controla desde un solo lugar la música que suena en tu navegador "
+            "(YouTube, Spotify, SoundCloud, Deezer, Apple Music, Tidal…) y en "
+            "las apps de escritorio de Windows, como Spotify.",
             size=11.5,
         )
         body.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(body)
 
         for line in (
-            "Tres modos: reproductor completo, barra compacta y un panel lateral en el borde de la pantalla.",
-            "Letras de canciones, historial local y teclas multimedia globales.",
-            "Colores de la interfaz que se adaptan a la carátula de cada canción.",
+            "Tres modos: completo, barra compacta y panel lateral.",
+            "Letras, historial, estadísticas y teclas multimedia globales.",
+            "Colores que se adaptan a la carátula de cada canción.",
         ):
             row = QHBoxLayout()
             row.setSpacing(8)
@@ -387,6 +432,7 @@ class WelcomeWizard(_DialogBase):
             layout.addLayout(row)
 
         layout.addStretch(1)
+        layout.addWidget(_DeveloperCard())
         return page
 
     def _build_page_modes(self) -> QWidget:
@@ -396,9 +442,9 @@ class WelcomeWizard(_DialogBase):
         layout.setSpacing(12)
 
         layout.addWidget(_label(
-            "¿Cuál querés que se abra al iniciar el programa? Podés cambiar "
-            "de uno a otro cuando quieras (menú del reproductor completo, "
-            "o desde el ícono de la bandeja).",
+            "¿Cuál quieres que se abra al iniciar? Puedes cambiar de uno a "
+            "otro cuando quieras desde el menú del reproductor o el ícono "
+            "de la bandeja.",
             size=11,
         ))
 
@@ -437,9 +483,9 @@ class WelcomeWizard(_DialogBase):
         layout.setSpacing(12)
 
         layout.addWidget(_label(
-            "WNP Player no lee tu navegador por sí solo: necesita la "
-            "extensión gratuita \"WebNowPlaying\", que le envía lo que "
-            "estás escuchando.",
+            "Para leer la música del navegador necesitas la extensión gratuita "
+            "\"WebNowPlaying\", que le envía a WNP Player lo que estás "
+            "escuchando. Las apps de escritorio, como Spotify, no la necesitan.",
             size=11,
         ))
 
@@ -448,8 +494,8 @@ class WelcomeWizard(_DialogBase):
             "(Chrome, Edge, Brave, Opera o Firefox).",
             "Abre las opciones de la extensión → “Add custom adapter / "
             "Agregar adaptador personalizado”.",
-            f"Usa el puerto {self.port} (el mismo que usa este programa; "
-            "se puede cambiar luego desde el menú, clic derecho).",
+            f"Usa el puerto {self.port}, el mismo que usa este programa "
+            "(puedes cambiarlo después en Configuración).",
         ), start=1):
             layout.addWidget(_StepRow(i, text))
 
@@ -470,9 +516,8 @@ class WelcomeWizard(_DialogBase):
         layout.addWidget(self.extension_link_status)
 
         layout.addWidget(_label(
-            "Si el sitio que estás usando es compatible, la música empieza "
-            "a aparecer en el reproductor apenas guardes el adaptador — no "
-            "hace falta reiniciar nada.",
+            "Si el sitio es compatible, la música aparece en el reproductor "
+            "en cuanto guardes el adaptador. No hace falta reiniciar nada.",
             size=10, color=Palette.TEXT_FAINT,
         ))
         layout.addStretch(1)
@@ -481,7 +526,7 @@ class WelcomeWizard(_DialogBase):
     def _build_page_finish(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(4, 10, 4, 4)
+        layout.setContentsMargins(4, 8, 4, 4)
         layout.setSpacing(12)
 
         title = _label("Todo listo", size=16, color=Palette.TEXT, weight=700, wrap=False)
@@ -492,14 +537,26 @@ class WelcomeWizard(_DialogBase):
         self.finish_summary.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.finish_summary)
 
+        self.start_with_windows_check = QCheckBox("Iniciar WNP Player junto con Windows")
+        self.start_with_windows_check.setChecked(self.result_start_with_windows)
+        self.start_with_windows_check.toggled.connect(self._on_start_with_windows_toggled)
+        layout.addWidget(self.start_with_windows_check)
         layout.addWidget(_label(
-            "Este panel no vuelve a aparecer solo — si querés repasarlo "
-            "más adelante, está en clic derecho → “Ver bienvenida de "
-            "nuevo...” (reproductor completo).",
+            "Puedes cambiarlo cuando quieras en Configuración.",
+            size=10, color=Palette.TEXT_FAINT,
+        ))
+
+        layout.addWidget(_label(
+            "Este asistente no vuelve a aparecer solo. Para repasarlo: clic "
+            "derecho en el reproductor → \u201cVer bienvenida de nuevo...\u201d.",
             size=10, color=Palette.TEXT_FAINT,
         ))
         layout.addStretch(1)
+        layout.addWidget(_DeveloperCard())
         return page
+
+    def _on_start_with_windows_toggled(self, checked: bool):
+        self.result_start_with_windows = bool(checked)
 
     # ------------------------------------------------------------- navegación
     def _open_store_link(self, url: str):
@@ -513,7 +570,7 @@ class WelcomeWizard(_DialogBase):
             self.extension_link_status.setVisible(False)
             return
         self.extension_link_status.setText(
-            f"No se pudo abrir el navegador automáticamente. Copiá este link: {url}"
+            f"No se pudo abrir el navegador automáticamente. Copia este enlace: {url}"
         )
         self.extension_link_status.setVisible(True)
 
@@ -547,8 +604,8 @@ class WelcomeWizard(_DialogBase):
                 "dock": "Panel lateral",
             }.get(self.result_default_mode, "Reproductor completo")
             self.finish_summary.setText(
-                f"WNP Player va a abrirse en modo \"{mode_text}\" la próxima vez.\n"
-                "Podés cambiarlo cuando quieras."
+                f"WNP Player se abrirá en modo \"{mode_text}\".\n"
+                "Puedes cambiarlo cuando quieras."
             )
         self._pending_page_index = index
         self._animate_page_change()

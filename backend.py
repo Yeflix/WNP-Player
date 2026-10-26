@@ -19,7 +19,7 @@ from dataclasses import dataclass
 
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 
-APP_VERSION = "1.0.0"
+from version import APP_VERSION
 DEFAULT_PORT = 1234
 POLL_INTERVAL_MS = 150
 IDLE_POLL_INTERVAL_MS = 700  # cuando ninguna ventana está visible (ver set_poll_interval)

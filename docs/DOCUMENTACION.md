@@ -85,7 +85,7 @@ python main.py --port 5678     # fija el puerto
 En Linux/macOS la app arranca, pero sin `winsdk` ni `RegisterHotKey`: no ve apps de escritorio y las teclas globales quedan desactivadas (el resto funciona).
 
 ### Primera ejecución
-Se muestra el **asistente de bienvenida** (4 pasos: bienvenida, modos de ventana, instalar la extensión, fin). Se guarda `onboarding_completed` y no vuelve a aparecer.
+Se muestra el **asistente de bienvenida** (4 pasos: bienvenida con la firma del desarrollador, modos de ventana, instalar la extensión, fin con la casilla «Iniciar junto con Windows»). Se guarda `onboarding_completed` y no vuelve a aparecer.
 
 ---
 
@@ -153,7 +153,8 @@ Ideas de diseño que se repiten por todo el código:
 | `widgets.py` | 2288 | Botones, barras, carátula, vinilo, panel de letra, indicador… |
 | `dialogs.py` | 1499 | Puerto, Acerca de, errores, teclas, estadísticas, historial, configuración |
 | `likes_dialog.py` | 218 | Conectar cuentas para "me gusta" |
-| `onboarding.py` | 589 | Asistente de bienvenida |
+| `onboarding.py` | ~650 | Asistente de bienvenida |
+| `autostart.py` | ~100 | Inicio con Windows (registro `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`) |
 | `weekly_recap.py` | 179 | Aviso semanal no modal |
 | `theme.py` | 714 | Paleta, aspectos, accesibilidad, QSS global |
 | `accent.py` | 172 | Colores de acento extraídos de la carátula |
@@ -410,6 +411,7 @@ Carpeta de datos (`WNPPlayer`): Windows `%LOCALAPPDATA%\WNPPlayer` · macOS `~/L
 | `always_on_top` | `false` | Siempre visible |
 | `main_width`, `main_x`, `main_y` | `null` | Ancho (zoom) y posición de la ventana completa |
 | `mini_scale`, `mini_x`, `mini_y` | `1.0`, `null` | Escala y posición de la compacta |
+| `start_with_windows` | `true` | Iniciar junto con Windows (clave `HKCU\...\Run`, ver `autostart.py`) |
 | `start_minimized` | `false` | Arrancar solo en la bandeja |
 | `hotkeys_enabled`, `hotkey_play_pause`, `hotkey_next`, `hotkey_previous` | `false`, `""` | Teclas globales |
 | `notifications_enabled` | `true` | Notificar al cambiar de canción |
@@ -581,6 +583,10 @@ for t in tests/test_*.py; do QT_QPA_PLATFORM=offscreen python $t || echo "FALLA 
 **Ronda 3 – Spicetify AutoFix y "reproducir sin reproductor".** Lanzador sin ventana y vigilante de apertura/cierre de Spotify; caché de la comprobación del parche; play activo en reposo con apertura de Spotify/YouTube y autoplay de Spotify.
 
 **Ronda 5 – Librerías y limpieza.** Verificadas las últimas versiones en PyPI (PyQt6 6.11.0, PyQt6-Qt6 6.11.2, PyQt6-sip 13.13.0, pywnp 2.0.2, aiohttp 3.14.5, winsdk 1.0.0b10); 600+ comprobaciones en verde sin avisos de obsolescencia; validación de `config.json`; CSV a prueba de fórmulas; MD5 de Last.fm marcado `usedforsecurity=False`; 58 anotaciones modernizadas (`X | None`) y 20 importaciones/variables sin uso eliminadas. Interfaz: los íconos (altavoz, silencio, corazón, nota…) se rellenan por devanado y ya no tienen huecos donde se cruzan trazos; la carátula ya no muestra manchas rojizas en las esquinas (el halo exterior quedaba recortado por el widget) y ahora tiene un borde de acento que "respira" con la reproducción.
+
+**Versión 1.1.0.** `version.py` es la única fuente de la versión. Al actualizar desde 1.0, `AppConfig.load` deja `start_with_windows` en `false` si el config ya existía sin esa clave.
+
+**Ronda 6 – Ajustes finales.** «Iniciar con Windows» en Configuración y en el asistente, activado por defecto: la entrada del registro se alinea con la configuración en cada arranque, así que un `.exe` movido de carpeta corrige solo su ruta. Panel lateral compacto: ya se muestran título y artista (se ocultaban por un error en `_sync_lyrics`). Asistente de bienvenida rehecho: sin menciones obsoletas, español neutro, firma del desarrollador (YefriDev) y aclaración de que las apps de escritorio no necesitan la extensión.
 
 **Ronda 4 – Funciones nuevas.** Selector de reproductor; letras más robustas con botón de recarga; botón "me gusta" (Spotify y YouTube, con OAuth PKCE); panel lateral con micrófono, corazón y sin botón de esquina; indicador de reproducción y círculo de ondas más llamativos; ondas alrededor de la barra, opcionales.
 
