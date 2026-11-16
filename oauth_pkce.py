@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import html
 import json
 import secrets
 import threading
@@ -25,6 +26,8 @@ import urllib.request
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from collections.abc import Callable
+import contextlib
+from diag import soft
 
 CALLBACK_PATH = "/callback"
 _TIMEOUT_S = 15
@@ -87,7 +90,7 @@ class CallbackServer:
         outer = self
 
         class Handler(BaseHTTPRequestHandler):
-            def do_GET(self):  # noqa: N802
+            def do_GET(self):
                 parsed = urllib.parse.urlparse(self.path)
                 if parsed.path != CALLBACK_PATH:
                     self.send_response(404)
@@ -96,7 +99,10 @@ class CallbackServer:
                 q = {k: v[0] for k, v in urllib.parse.parse_qs(parsed.query).items()}
                 outer._result = q
                 ok = "code" in q and "error" not in q
-                body = (_PAGE_OK if ok else _PAGE_ERR % (q.get("error_description") or q.get("error") or "")).encode("utf-8")
+                # El texto del error viene en la URL (lo controla quien arme el enlace):
+                # se escapa para que no se pueda inyectar HTML en esta página local.
+                detail = html.escape(q.get("error_description") or q.get("error") or "")
+                body = (_PAGE_OK if ok else _PAGE_ERR % detail).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
@@ -140,11 +146,9 @@ class CallbackServer:
         return code
 
     def close(self):
-        try:
+        with soft("oauth_pkce.CallbackServer.close"):
             self._server.shutdown()
             self._server.server_close()
-        except Exception:  # noqa: BLE001
-            pass
 
 
 # ------------------------------------------------------------------- tokens
@@ -157,11 +161,9 @@ def _post_form(url: str, data: dict) -> dict:
             return json.loads(resp.read().decode("utf-8") or "{}")
     except urllib.error.HTTPError as exc:
         detail = ""
-        try:
+        with contextlib.suppress(Exception):
             payload = json.loads(exc.read().decode("utf-8") or "{}")
             detail = payload.get("error_description") or payload.get("error") or ""
-        except Exception:  # noqa: BLE001
-            pass
         raise OAuthError(f"El servicio respondió {exc.code}. {detail}".strip()) from exc
     except (urllib.error.URLError, TimeoutError) as exc:
         raise OAuthError(f"No se pudo conectar con el servicio: {getattr(exc, 'reason', exc)}") from exc

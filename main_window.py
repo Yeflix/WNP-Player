@@ -2,22 +2,24 @@
 import math
 import time
 
+from PyQt6 import sip
 from PyQt6.QtCore import (
-    Qt, QPoint, QPointF, QRect, QRectF, QUrl, pyqtSignal, pyqtProperty, QPropertyAnimation, QEasingCurve, QTimer,
+    Qt, QPoint, QPointF, QRect, QRectF, QUrl, pyqtSignal, pyqtProperty, QPropertyAnimation, QEasingCurve, QTimer, QEvent,
 )
 from PyQt6.QtGui import QPainter, QColor, QPainterPath, QLinearGradient, QFont, QPen, QDesktopServices
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QMenu
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QMenu, QApplication
 )
 
 from theme import Palette, FONT_BODY, FONT_MONO, font_px, mark_configurable_scale
 import theme as theme_module
-from widgets import (IconButton, SeekBar, VolumeBar, CoverArt, MarqueeLabel, LyricsPanel, PlayingIndicator,
-                     ElidedLabel, PlatformPickerButton, LIKE_RGB, blur_image_hq)
+from widgets import (sync_accessible_names, IconButton, SeekBar, VolumeBar, CoverArt, MarqueeLabel, LyricsPanel, PlayingIndicator,
+                     ElidedLabel, PlatformPickerButton, LIKE_RGB, blur_image_hq, OptimisticHold, SpectrumBars)
 import player_launcher
 from backend import PlayerState
 from dialogs import PortDialog, AboutDialog
 from youtube_api import VideoLinkResolver
+import contextlib
 
 WIDTH = 356
 COVER_SIZE = 196
@@ -55,6 +57,13 @@ STATE_LABELS = {
     "PLAYING": "REPRODUCIENDO",
     "PAUSED": "EN PAUSA",
     "STOPPED": "EN ESPERA",
+}
+# Versiones cortas para cuando falta ancho (ventana estrecha o escala grande): antes la etiqueta
+# se recortaba a «REPRODUCI…»; ahora pasa a una palabra completa más corta.
+STATE_LABELS_SHORT = {
+    "PLAYING": "SONANDO",
+    "PAUSED": "PAUSA",
+    "STOPPED": "ESPERA",
 }
 
 # Mismo orden que usa el ciclo real en pywnp_patch.py (apagado -> todo ->
@@ -157,7 +166,7 @@ class MainWindow(QWidget):
         # lo demás, Windows simplemente no le crea entrada en la taskbar.
         self.setWindowFlag(Qt.WindowType.Tool)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setWindowTitle("WNP Player")
+        self.setWindowTitle("YefriPlayer")
         self.resize(WIDTH, self.height())
 
         self._adjusting = False
@@ -305,8 +314,10 @@ class MainWindow(QWidget):
             "Sin reproducción",
             font=QFont(FONT_BODY, font_px(17), QFont.Weight.Bold),
             color=Palette.c(Palette.TEXT),
+            max_static_lines=2,          # con movimiento reducido, hasta 2 líneas en vez de cortar el título
         )
         self.title_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.title_label.heightHintChanged.connect(self._refit_height)
         root.addWidget(self.title_label)
         root.addSpacing(4)
 
@@ -317,6 +328,11 @@ class MainWindow(QWidget):
         )
         self.artist_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         root.addWidget(self.artist_label)
+        # Visualizador de audio (opcional, oculto por defecto: ver audio_levels.py).
+        # Al ocultarse no ocupa nada en el layout.
+        self.spectrum = SpectrumBars(height=44)
+        self.spectrum.setVisible(False)
+        root.addWidget(self.spectrum)
         root.addSpacing(20)
 
         # --- Progreso ---
@@ -379,6 +395,12 @@ class MainWindow(QWidget):
         self.volume_icon = IconButton("speaker", size=22, icon_scale=0.62, bg=None)
         self.volume_icon.setEnabled(False)   # se habilita en apply_state si la fuente permite volumen
         self._premute_volume = 0
+        # Órdenes recién pedidas que el sondeo aún no confirma (ver OptimisticHold).
+        self._play_hold = OptimisticHold(1.2)
+        self._audio_levels = None
+        self._audio_glow_until = 0.0
+        self._shuffle_hold = OptimisticHold(1.2)
+        self._repeat_hold = OptimisticHold(1.2)
         volume_row.addWidget(self.volume_icon)
         self.volume_bar = VolumeBar(height=16, bar_height=6)
         self.volume_bar.set_percent(100)
@@ -523,8 +545,23 @@ class MainWindow(QWidget):
             self.backend.toggle_play_pause()
             return
         will_play = self.play_btn.icon_name != "pause"
+        self._play_hold.set(will_play)
         self.play_btn.set_icon("pause" if will_play else "play")
-        self.backend.toggle_play_pause()
+        self.backend.set_playing(will_play)
+        QTimer.singleShot(1300, self._resync_controls)
+
+    def _resync_controls(self):
+        """Vence el plazo de una orden optimista. Si el reproductor la ignoró,
+        no llega ningún estado nuevo (el backend solo emite cuando algo cambia)
+        y el botón se quedaba mostrando lo que se había pedido, no la realidad."""
+        st = self._last_state
+        if st is None:
+            return
+        self.play_btn.set_icon("pause" if self._play_hold.resolve(st.state == "PLAYING") else "play")
+        self.shuffle_btn.set_active(self._shuffle_hold.resolve(st.shuffle_active))
+        mode = self._repeat_hold.resolve(st.repeat_mode)
+        self.repeat_btn.set_icon("repeat_one" if mode == "ONE" else "repeat")
+        self.repeat_btn.set_active(mode != "NONE")
 
     def _on_mute_clicked(self):
         """Clic en el ícono de parlante: silencia o restaura el volumen previo."""
@@ -534,13 +571,16 @@ class MainWindow(QWidget):
             target = 0
         else:
             target = self._premute_volume or 50
-        self.volume_bar.set_percent(target)
+        self.volume_bar.set_user_percent(target)
         self.volume_icon.set_icon("speaker_mute" if target <= 0 else "speaker")
         self._on_volume_changed(target)
 
     def _on_shuffle_clicked(self):
-        self.shuffle_btn.set_active(not self.shuffle_btn.is_active())
+        new_value = not self.shuffle_btn.is_active()
+        self._shuffle_hold.set(new_value)
+        self.shuffle_btn.set_active(new_value)
         self.backend.toggle_shuffle()
+        QTimer.singleShot(1300, self._resync_controls)
 
     def _on_repeat_clicked(self):
         if self.repeat_btn.icon_name == "repeat_one":
@@ -550,9 +590,11 @@ class MainWindow(QWidget):
         else:
             current = "NONE"
         next_mode = REPEAT_CYCLE.get(current, "ALL")
+        self._repeat_hold.set(next_mode)
         self.repeat_btn.set_icon("repeat_one" if next_mode == "ONE" else "repeat")
         self.repeat_btn.set_active(next_mode != "NONE")
         self.backend.toggle_repeat()
+        QTimer.singleShot(1300, self._resync_controls)
 
     # ------------------------------------------------------------- estado
     def set_youtube_api_key(self, key: str):
@@ -567,7 +609,8 @@ class MainWindow(QWidget):
             return
         self._last_state = state
 
-        self.eyebrow_label.setText(STATE_LABELS.get(state.state, "EN ESPERA"))
+        self.eyebrow_label.set_variants([STATE_LABELS.get(state.state, "EN ESPERA"),
+                                         STATE_LABELS_SHORT.get(state.state, "ESPERA")])
         is_playing = state.state == "PLAYING"
         self.playing_indicator.set_playing(is_playing and state.connected)
         self.playing_indicator.set_idle_color(self._dot_idle_color(state))
@@ -603,17 +646,19 @@ class MainWindow(QWidget):
                 self.position_label.setText(state.position or "0:00")
             self.duration_label.setText(state.duration or "0:00")
 
-        self.play_btn.set_icon("pause" if state.state == "PLAYING" else "play")
+        playing = self._play_hold.resolve(state.state == "PLAYING")
+        self.play_btn.set_icon("pause" if playing else "play")
         self._apply_play_enabled(state)
         self.prev_btn.setEnabled(state.controls_available)
         self.next_btn.setEnabled(state.controls_available)
 
         self.shuffle_btn.setEnabled(state.controls_available)
-        self.shuffle_btn.set_active(state.shuffle_active)
+        self.shuffle_btn.set_active(self._shuffle_hold.resolve(state.shuffle_active))
 
         self.repeat_btn.setEnabled(state.controls_available)
-        self.repeat_btn.set_icon("repeat_one" if state.repeat_mode == "ONE" else "repeat")
-        self.repeat_btn.set_active(state.repeat_mode != "NONE")
+        repeat_mode = self._repeat_hold.resolve(state.repeat_mode)
+        self.repeat_btn.set_icon("repeat_one" if repeat_mode == "ONE" else "repeat")
+        self.repeat_btn.set_active(repeat_mode != "NONE")
 
         self.volume_bar.set_interactive(state.can_volume)
         self.volume_icon.setToolTip(
@@ -623,9 +668,11 @@ class MainWindow(QWidget):
             "(las apps de escritorio de Windows no exponen esa opción)"
         )
         self.volume_icon.setEnabled(state.can_volume)
-        self.volume_icon.set_icon("speaker_mute" if state.volume <= 0 else "speaker")
         if not self.volume_bar.is_dragging():
             self.volume_bar.set_percent(max(0, min(100, state.volume)))
+        # El ícono sigue a la barra (que ya incluye lo que el usuario acaba de
+        # pedir), no al valor viejo del sondeo.
+        self.volume_icon.set_icon("speaker_mute" if round(self.volume_bar._percent) <= 0 else "speaker")
 
         if state.cover_url != self._current_cover_url:
             self._current_cover_url = state.cover_url
@@ -856,6 +903,20 @@ class MainWindow(QWidget):
         finally:
             self._adjusting = False
 
+    def _refit_height(self):
+        """El título pasó de 1 a 2 líneas (o al revés, con movimiento reducido): el alto de la
+        ventana sigue al del layout, así que hay que volver a ajustarlo."""
+        if self._adjusting or not hasattr(self, "cover") or sip.isdeleted(self):
+            return
+        self._adjusting = True
+        try:
+            self.layout().activate()
+            target_h = self.layout().sizeHint().height()
+            if abs(target_h - self.height()) > 1:
+                self.resize(self.width(), target_h)
+        finally:
+            self._adjusting = False
+
     def wheelEvent(self, event):
         """Zoom con la rueda del mouse (como en la mini ventana): agranda o
         encoge la columna de contenido, anclado al centro para que no
@@ -968,12 +1029,53 @@ class MainWindow(QWidget):
             self.lyrics_left_arrow.set_accent(rgb_a, rgb_b)
             self.lyrics_right_arrow.set_accent(rgb_a, rgb_b)
         self.playing_indicator.set_color(rgb_a)
+        self.spectrum.set_colors(rgb_a, rgb_b)
         # El acento sale de la carátula: como TEXTO puede caer en 1.8:1 (azul
         # oscuro). Se aclara solo lo necesario hasta 4.5:1 contra el fondo real.
         self.artist_label.set_color(QColor(*theme_module.ensure_contrast(rgb_a, self._text_bg, 4.5)))
         self.update()  # repinta el borde de la ventana con el color interpolado
 
     transitionProgress = pyqtProperty(float, _get_transition_progress, _set_transition_progress)
+
+    # ------------------------------------------------ visualizador de audio
+    def set_audio_levels(self, levels):
+        """Conecta el servicio de niveles de audio (None lo desconecta)."""
+        if self._audio_levels is levels:
+            return
+        if self._audio_levels is not None:
+            with contextlib.suppress(TypeError, RuntimeError):
+                self._audio_levels.levelsChanged.disconnect(self._on_audio_levels)
+        self._audio_levels = levels
+        self.spectrum.set_source(levels)
+        if levels is not None:
+            levels.levelsChanged.connect(self._on_audio_levels)
+
+    def set_audio_visualizer_visible(self, on: bool):
+        """Muestra u oculta la barra de espectro (con "reducir movimiento" no se muestra)."""
+        on = bool(on) and not theme_module.REDUCED_MOTION
+        if on == self.spectrum.isVisibleTo(self):
+            return
+        self.spectrum.setVisible(on)
+        # La ventana toma su alto del layout: se recalcula (misma vía que el zoom).
+        # Al OCULTAR, Qt conserva el tamaño anterior en caché del layout padre
+        # hasta procesar el LayoutRequest pendiente de la columna de contenido;
+        # se procesa a mano para que la ventana encoja ya, no en el próximo ciclo.
+        self.content_widget.layout().invalidate()
+        QApplication.sendPostedEvents(self.content_widget, QEvent.Type.LayoutRequest)
+        self.layout().invalidate()
+        QApplication.sendPostedEvents(self, QEvent.Type.LayoutRequest)
+        self._apply_content_width(self._content_width)
+
+    def _on_audio_levels(self, bands):
+        """Audio real: el borde de la carátula y el indicador del encabezado
+        siguen el sonido en vez de su animación decorativa."""
+        if not self.isVisible() or not bands:
+            return
+        import audio_levels
+        if self._glow_playing:
+            self._audio_glow_until = time.monotonic() + 0.35
+            self.cover.set_glow_intensity(0.4 + 0.6 * audio_levels.bass_level(bands))
+        self.playing_indicator.set_levels(bands)
 
     def _on_glow_tick(self):
         # Onda seno lenta entre 0.55 y 1.0 (mismo rango que antes con
@@ -987,6 +1089,8 @@ class MainWindow(QWidget):
         dt = 0.08 if self._glow_last is None else min(now - self._glow_last, 0.25)
         self._glow_last = now
         self._glow_phase += 0.975 * dt
+        if now < self._audio_glow_until:
+            return          # hay audio real: _on_audio_levels mueve el borde de la carátula
         wave = (math.sin(self._glow_phase) + 1) / 2  # 0..1
         self.cover.set_glow_intensity(0.55 + wave * 0.45)
 
@@ -1024,6 +1128,9 @@ class MainWindow(QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
+        if not getattr(self, "_a11y_synced", False):
+            self._a11y_synced = True
+            sync_accessible_names(self)
         # Si "debería" estar animando el glow (canción sonando) pero el
         # timer estaba parado porque la ventana estuvo oculta, lo
         # retomamos ahora que vuelve a verse. No tiene sentido gastar
@@ -1231,6 +1338,10 @@ class MainWindow(QWidget):
                 )
             else:
                 self.lyrics_panel.set_track("", "", "", 0)
+        else:
+            # Misma canción: el álbum y la duración pueden llegar (o corregirse)
+            # después del título; el panel los guarda y reintenta si hacía falta.
+            self.lyrics_panel.update_metadata(state.album, state.duration_seconds)
         self.lyrics_panel.set_position(state.position_seconds)
         self.lyrics_panel.set_playing(state.state == "PLAYING")
 
@@ -1307,6 +1418,12 @@ class MainWindow(QWidget):
     # ------------------------------------------------------- atajos de teclado
     def keyPressEvent(self, event):
         key = event.key()
+        if event.isAutoRepeat() and key in (Qt.Key.Key_Space, Qt.Key.Key_Right, Qt.Key.Key_Left,
+                                            Qt.Key.Key_MediaNext, Qt.Key.Key_MediaPrevious):
+            # Mantener la tecla pulsada no debe alternar play/pausa ni saltar
+            # varias canciones: cuenta una sola pulsación.
+            event.accept()
+            return
         if key == Qt.Key.Key_Space:
             if self.play_btn.isEnabled():
                 self._on_play_clicked()
@@ -1344,7 +1461,7 @@ class MainWindow(QWidget):
         # Se crea una instancia NUEVA cada vez que se abre el menú (cada
         # clic en el botón de engranaje) — sin esto quedaba viva para
         # siempre como hijo de la ventana, igual que pasaba con los
-        # diálogos antes de corregirlo (ver sección 12.1 de PROYECTO.md).
+        # diálogos antes de corregirlo (ver README.md, sección 7).
         menu.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         compact_action = menu.addAction("Modo compacto")
         dock_action = menu.addAction("Panel lateral")

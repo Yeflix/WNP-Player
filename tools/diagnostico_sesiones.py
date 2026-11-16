@@ -35,6 +35,7 @@ import socket
 import subprocess
 import sys
 import time
+import contextlib
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
@@ -53,13 +54,19 @@ def is_spotify_id(app_id: str) -> bool:
     return "spotify" in (app_id or "").lower()
 
 
+def _sistema(*partes: str) -> str:
+    """Ruta completa de una herramienta de Windows (no se busca en el PATH)."""
+    base = os.environ.get("SystemRoot", r"C:\Windows")
+    return os.path.join(base, *partes)
+
+
 # ----------------------------------------------------------------- capa 1
 def spotify_processes() -> int:
     try:
-        r = subprocess.run(["tasklist", "/FI", "IMAGENAME eq Spotify.exe", "/FO", "CSV", "/NH"],
-                           capture_output=True, text=True, timeout=15)
+        r = subprocess.run([_sistema("System32", "tasklist.exe"), "/FI", "IMAGENAME eq Spotify.exe", "/FO", "CSV", "/NH"],
+                           capture_output=True, text=True, timeout=15, check=False)
         return sum(1 for ln in r.stdout.splitlines() if ln.lower().startswith('"spotify.exe"'))
-    except Exception:  # noqa: BLE001
+    except Exception:
         return -1   # no se pudo comprobar
 
 
@@ -68,10 +75,11 @@ def spotify_version() -> str:
     if not os.path.isfile(exe):
         return "(no encuentro %APPDATA%\\Spotify\\Spotify.exe: ¿versión de Microsoft Store?)"
     try:
-        r = subprocess.run(["powershell", "-NoProfile", "-Command", f"(Get-Item '{exe}').VersionInfo.ProductVersion"],
-                           capture_output=True, text=True, timeout=20)
+        r = subprocess.run([_sistema("System32", "WindowsPowerShell", "v1.0", "powershell.exe"), "-NoProfile", "-Command",
+                            f"(Get-Item '{exe}').VersionInfo.ProductVersion"],
+                           capture_output=True, text=True, timeout=20, check=False)
         return r.stdout.strip() or "(sin dato)"
-    except Exception:  # noqa: BLE001
+    except Exception:
         return "(no se pudo leer)"
 
 
@@ -80,7 +88,7 @@ def windows_sessions() -> tuple[bool, list[dict], str]:
     """(winsdk disponible, sesiones que ve Windows, error)."""
     try:
         from winsdk.windows.media.control import GlobalSystemMediaTransportControlsSessionManager as SM
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return False, [], f"{type(exc).__name__}: {exc}"
 
     async def _list():
@@ -94,19 +102,19 @@ def windows_sessions() -> tuple[bool, list[dict], str]:
             try:
                 info = s.get_playback_info()
                 row["estado"] = _STATUS.get(info.playback_status.value, str(info.playback_status))
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 row["estado"] = f"error: {exc}"
             try:
                 props = await s.try_get_media_properties_async()
                 row["titulo"], row["artista"] = props.title, props.artist
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 row["titulo"] = f"(error: {exc})"
             res.append(row)
         return res
 
     try:
         return True, asyncio.run(_list()), ""
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return True, [], f"{type(exc).__name__}: {exc}"
 
 
@@ -114,25 +122,21 @@ def windows_sessions() -> tuple[bool, list[dict], str]:
 def pywnp_view(wait_seconds: float = 6.0) -> dict:
     info = {"ok": False, "error": "", "native_enabled": None, "wnp_path": "", "native_dir_exists": None,
             "entries": [], "current": None, "logs": [], "version": ""}
-    try:
+    with contextlib.suppress(Exception):
         from importlib.metadata import version
         info["version"] = version("pywnp")
-    except Exception:  # noqa: BLE001
-        pass
     try:
         import pywnp_patch
         pywnp_patch.apply()
         from pywnp import WNPRedux
         from pywnp.pywnp import get_wnp_path
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         info["error"] = f"{type(exc).__name__}: {exc}"
         return info
 
-    try:
+    with contextlib.suppress(Exception):
         info["wnp_path"] = get_wnp_path()
         info["native_dir_exists"] = os.path.isdir(os.path.join(info["wnp_path"], "use_native_apis"))
-    except Exception:  # noqa: BLE001
-        pass
 
     with socket.socket() as s:      # puerto libre aparte
         s.bind(("127.0.0.1", 0))
@@ -155,7 +159,7 @@ def pywnp_view(wait_seconds: float = 6.0) -> dict:
         info["current"] = {"id": getattr(cur, "_id", ""), "player_name": cur.player_name,
                            "estado": cur.state, "titulo": cur.title}
         info["ok"] = True
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         info["error"] = f"{type(exc).__name__}: {exc}"
     return info
 
@@ -175,7 +179,7 @@ def autofix_info() -> list[str]:
             tail = open(log, encoding="utf-8-sig").read().strip().splitlines()[-4:]
             res.append("Últimas líneas del registro:")
             res.extend("  " + ln for ln in tail)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         res.append(f"(no se pudo leer: {exc})")
     return res
 
@@ -279,12 +283,10 @@ def main() -> int:
     out("===========================================")
 
     fname = datetime.datetime.now().strftime("diagnostico_sesiones_%Y%m%d_%H%M%S.txt")
-    try:
+    with contextlib.suppress(OSError):
         with open(fname, "w", encoding="utf-8") as fh:
             fh.write("\n".join(_LINES) + "\n")
         print(f"\nGuardado en {os.path.abspath(fname)}")
-    except OSError:
-        pass
     return 0
 
 

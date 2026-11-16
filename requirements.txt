@@ -3,6 +3,7 @@
 #   pywnp 2.0.2 (sigue siendo la última: pywnp_patch.py sigue haciendo falta)
 #   aiohttp 3.14.5 (dependencia de pywnp; se lista para que PyInstaller/pip la fijen)
 #   winsdk 1.0.0b10 (solo Windows; sigue siendo la última, solo existen betas)
+#   numpy 2.5.4, PyAudioWPatch 0.2.12.9 (visualizador de audio)
 PyQt6>=6.11,<7
 pywnp>=2.0.2,<2.1
 aiohttp>=3.14.5
@@ -13,4 +14,13 @@ aiohttp>=3.14.5
 # El requisito anterior "winsdk>=1.0.0" NO lo cumple ninguna versión publicada
 # (1.0.0b10 < 1.0.0 según PEP 440), así que `pip install -r requirements.txt`
 # fallaba en Windows con "No matching distribution found".
+# IMPORTANTE (Windows): winsdk solo existe para Python 3.8 a 3.12 (último release: ago 2023).
+# Usa Python 3.10, 3.11 o 3.12. En Linux/macOS no hace falta y cualquier Python 3.10+ sirve.
 winsdk>=1.0.0b10; sys_platform == "win32"
+
+# Visualizador de audio (opcional; sin estas dos el programa funciona igual y la
+# opción aparece desactivada con el motivo):
+#   numpy        análisis de espectro (FFT)
+#   PyAudioWPatch  captura de lo que suena por los altavoces (WASAPI loopback, solo Windows)
+numpy>=1.26
+PyAudioWPatch>=0.2.12; sys_platform == "win32"

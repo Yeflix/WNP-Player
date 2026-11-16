@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import datetime
 from collections import Counter
+import contextlib
 
 WEEK_SECONDS = 7 * 24 * 3600
 
@@ -48,10 +49,8 @@ def entries_since(entries: list[dict], days: int) -> list[dict]:
 def total_seconds(entries: list[dict]) -> int:
     total = 0
     for e in entries:
-        try:
+        with contextlib.suppress(TypeError, ValueError):
             total += max(0, int(e.get("duration_seconds") or 0))
-        except (TypeError, ValueError):
-            pass
     return total
 
 
@@ -68,6 +67,12 @@ def format_duration(seconds: int) -> str:
     if minutes:
         return f"{minutes} min"
     return "menos de 1 min" if seconds > 0 else "0 min"
+
+
+def shorten_duration(text: str) -> str:
+    """'2 h 50 min' -> '2 h 50 m': versión compacta para los recuadros de Estadísticas, donde
+    la cifra grande no cabía en una línea y se partía en dos. Lo demás queda igual."""
+    return text.replace(" min", " m") if " h " in text else text
 
 
 def play_count(entries: list[dict], title: str, artist: str) -> int:

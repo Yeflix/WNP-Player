@@ -1,6 +1,6 @@
 // ==UserScript==
-// @name         WNP - Saltar anuncios de YouTube automaticamente
-// @namespace    wnp-player
+// @name         YefriPlayer - Saltar anuncios de YouTube automaticamente
+// @namespace    yefriplayer
 // @version      1.0.0
 // @description  Pulsa por ti el boton "Saltar anuncio" de YouTube en cuanto aparece. Solo actua con anuncios que YouTube permite saltar.
 // @match        https://www.youtube.com/*
@@ -58,14 +58,16 @@
   function load(key, fallback) {
     try {
       if (typeof GM_getValue === 'function') return GM_getValue(key, fallback);
-      var raw = window.localStorage.getItem('wnp_autoskip_' + key);
+      var raw = window.localStorage.getItem('yefriplayer_autoskip_' + key);
+      // Nombre usado antes del cambio a YefriPlayer: se sigue leyendo para no perder el contador.
+      if (raw === null) raw = window.localStorage.getItem('wnp_autoskip_' + key);
       return raw === null ? fallback : JSON.parse(raw);
     } catch (e) { return fallback; }
   }
   function save(key, value) {
     try {
       if (typeof GM_setValue === 'function') GM_setValue(key, value);
-      else window.localStorage.setItem('wnp_autoskip_' + key, JSON.stringify(value));
+      else window.localStorage.setItem('yefriplayer_autoskip_' + key, JSON.stringify(value));
     } catch (e) { /* sin almacenamiento: el contador simplemente no persiste */ }
   }
 
@@ -76,7 +78,7 @@
 
   function log() {
     if (!debug) return;
-    var args = ['[WNP auto-salto]'].concat([].slice.call(arguments));
+    var args = ['[YefriPlayer auto-salto]'].concat([].slice.call(arguments));
     try { console.log.apply(console, args); } catch (e) { /* nada */ }
   }
 

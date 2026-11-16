@@ -17,6 +17,8 @@ resultado se entrega por señal de Qt.
 """
 from __future__ import annotations
 
+from version import user_agent
+
 import json
 import urllib.error
 import urllib.parse
@@ -47,7 +49,7 @@ def find_video_url(api_key: str, artist: str, title: str) -> str | None:
         "key": api_key,
     }
     url = f"{_SEARCH_URL}?{urllib.parse.urlencode(params)}"
-    req = urllib.request.Request(url, headers={"User-Agent": "WNP-Player"})
+    req = urllib.request.Request(url, headers={"User-Agent": user_agent()})
     try:
         with urllib.request.urlopen(req, timeout=_TIMEOUT_SECONDS) as resp:
             data = json.loads(resp.read().decode("utf-8", errors="replace"))
@@ -58,7 +60,7 @@ def find_video_url(api_key: str, artist: str, title: str) -> str | None:
         if not video_id:
             return None
         return f"https://www.youtube.com/watch?v={video_id}"
-    except Exception:  # noqa: BLE001 — red, timeout, JSON/forma inesperada, cuota, lo que sea
+    except Exception:
         return None
 
 

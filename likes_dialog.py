@@ -187,7 +187,7 @@ class LikesDialog(_DialogBase):
                 self._connectFinished.emit(service, self._authorize(service, client_id, secret), "")
             except oauth_pkce.OAuthError as exc:
                 self._connectFinished.emit(service, None, str(exc))
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 self._connectFinished.emit(service, None, f"Error inesperado: {exc}")
         threading.Thread(target=work, daemon=True).start()
 

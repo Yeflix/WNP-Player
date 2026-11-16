@@ -5,7 +5,7 @@ Usa la librería `pywnp`, que implementa el servidor WebSocket compatible con
 la extensión oficial de WebNowPlaying (https://wnp.keifufu.dev). Ese servidor
 es exactamente lo mismo que usa el plugin de Rainmeter (WebNowPlaying.dll):
 la extensión del navegador se conecta a nuestro programa igual que se
-conectaría a Rainmeter, por eso esto funciona como reproductor independiente
+conectaría a Rainmeter, por eso esto funciona como controlador multimedia independiente
 para YouTube, Spotify (web) y cualquier otro sitio soportado por la extensión.
 
 En Windows, pywnp también expone automáticamente las sesiones multimedia
@@ -13,6 +13,7 @@ nativas de Windows (SMTC) para apps de escritorio como Spotify.
 """
 from __future__ import annotations
 
+import dataclasses
 import socket
 import time
 from dataclasses import dataclass
@@ -20,7 +21,10 @@ from dataclasses import dataclass
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 
 from version import APP_VERSION
-DEFAULT_PORT = 1234
+
+import pywnp_patch
+from diag import soft
+from config import DEFAULT_PORT  # noqa: F401 — se reexporta (lo importan otros módulos y las pruebas)
 POLL_INTERVAL_MS = 150
 IDLE_POLL_INTERVAL_MS = 700  # cuando ninguna ventana está visible (ver set_poll_interval)
 
@@ -100,6 +104,15 @@ class WNPBackend(QObject):
         # Se exige un margen (NO_PLAYER_GRACE_S) para no confundir el hueco
         # de 1-2 s entre dos canciones de YouTube con "no hay reproductor".
         self._no_media_since: float | None = time.monotonic()
+        self._poll_error_at: float | None = None   # último aviso de fallo al leer el estado
+        # Volumen por aplicación para apps de escritorio (ver app_volume.py y
+        # _with_app_volume). Se crea al primer uso; None = no disponible.
+        self._app_volume = None
+        self._app_volume_failed = False
+        self._app_vol_names: tuple[str, ...] = ()      # ejecutables del reproductor actual ('' = no aplica)
+        self._app_vol_key: tuple[str, ...] = ()
+        self._app_vol_value: float | None = None
+        self._app_vol_at = 0.0
         self._timer = QTimer(self)
         self._timer.setInterval(poll_interval_ms)
         self._timer.timeout.connect(self._poll)
@@ -143,7 +156,7 @@ class WNPBackend(QObject):
             self._last_connected = None
             self._timer.start()
             self.started.emit(self.port)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             self.serverError.emit(self._format_start_error(exc))
 
     @staticmethod
@@ -159,10 +172,12 @@ class WNPBackend(QObject):
         if not self._running:
             return
         self._timer.stop()
-        try:
+        if self._app_volume is not None:
+            with soft("backend.app_volume.close"):
+                self._app_volume.close()
+            self._app_volume = None
+        with soft("backend.WNPBackend.stop"):
             self._wnp.stop()
-        except Exception:  # noqa: BLE001
-            pass
         self._running = False
         self._last_state = None   # tras reiniciar hay que volver a emitir el estado
         self.stopped.emit()
@@ -203,6 +218,10 @@ class WNPBackend(QObject):
 
     # --- Sondeo del estado -----------------------------------------------
     def _poll(self):
+        with soft("backend.WNPBackend._poll"):  # nunca debe afectar al sondeo
+            # Limpia sesiones nativas de Windows que ya no existen (ver
+            # pywnp_patch.reconcile_native_sessions); sale al instante casi siempre.
+            pywnp_patch.schedule_reconcile()
         try:
             mi = self._wnp.media_info
             ctr = mi.controls
@@ -240,9 +259,17 @@ class WNPBackend(QObject):
                 can_shuffle=ctr.supports_toggle_shuffle_active,
                 can_repeat=ctr.supports_toggle_repeat_mode,
             )
-        except Exception as exc:  # noqa: BLE001
-            self.serverError.emit(f"Error leyendo el estado de reproducción: {exc}")
+        except Exception as exc:
+            # Un fallo persistente se repetía en CADA sondeo (~7 veces por segundo):
+            # se avisa la primera vez y luego como mucho cada POLL_ERROR_REPEAT_S.
+            now = time.monotonic()
+            if self._poll_error_at is None or now - self._poll_error_at >= self.POLL_ERROR_REPEAT_S:
+                self._poll_error_at = now
+                self.serverError.emit(f"Error leyendo el estado de reproducción: {exc}")
             return
+        self._poll_error_at = None
+
+        state = self._with_app_volume(state)
 
         if state.has_media:
             self._no_media_since = None
@@ -263,11 +290,73 @@ class WNPBackend(QObject):
         self._last_state = state
         self.stateChanged.emit(state)
 
+    # --- Estado de la conexión (para la bienvenida) --------------------------
+    def connection_info(self) -> dict:
+        """Qué hay conectado ahora mismo, para comprobar la extensión en la
+        bienvenida: servidor en marcha, navegadores conectados (clientes del
+        WebSocket) y lo último que sonó (título, artista, reproductor)."""
+        st = self._last_state
+        clients = 0
+        if self._running:
+            with soft("backend.connection_info"):
+                clients = int(getattr(getattr(self, "_wnp", None), "clients", 0) or 0)
+        return {
+            "running": self._running,
+            "port": self.port,
+            "browsers": clients,
+            "has_media": bool(st is not None and st.has_media and st.title),
+            "title": st.title if st is not None else "",
+            "artist": st.artist if st is not None else "",
+            "player": st.player_name if st is not None else "",
+        }
+
+    # --- Volumen por aplicación (apps de escritorio) ------------------------
+    APP_VOLUME_REFRESH_S = 1.0
+
+    def _app_volume_service(self):
+        if self._app_volume is None and not self._app_volume_failed:
+            import app_volume
+            if app_volume.available():
+                try:
+                    self._app_volume = app_volume.AppVolume()
+                except Exception:
+                    self._app_volume_failed = True
+            else:
+                self._app_volume_failed = True
+        return self._app_volume
+
+    def _with_app_volume(self, state: PlayerState) -> PlayerState:
+        """Si la fuente no ofrece volumen (sesiones de Windows: Spotify de
+        escritorio, VLC...) pero su proceso tiene una sesión de audio, se usa el
+        volumen de esa aplicación en Windows. Se consulta como mucho una vez por
+        segundo (recorrer las sesiones de audio cuesta algo de COM)."""
+        if state.can_volume or not state.connected or not state.player_name:
+            self._app_vol_names = ()
+            return state
+        service = self._app_volume_service()
+        if service is None:
+            return state
+        import app_volume
+        names = app_volume.exe_names_for(state.player_name)
+        now = time.monotonic()
+        if names != self._app_vol_key or now - self._app_vol_at >= self.APP_VOLUME_REFRESH_S:
+            self._app_vol_key = names
+            self._app_vol_at = now
+            self._app_vol_value = None
+            with soft("backend.app_volume.get"):
+                self._app_vol_value = service.get(names)
+        if self._app_vol_value is None:
+            self._app_vol_names = ()
+            return state
+        self._app_vol_names = names
+        return dataclasses.replace(state, can_volume=True, volume=int(round(self._app_vol_value * 100)))
+
     # --- Controles (siempre seguros de invocar) --------------------------
     def _controls(self):
         return self._wnp.media_info.controls
 
     NO_PLAYER_GRACE_S = 1.0
+    POLL_ERROR_REPEAT_S = 30.0
 
     def has_no_player(self) -> bool:
         """True si lleva al menos NO_PLAYER_GRACE_S sin ningun reproductor."""
@@ -288,11 +377,51 @@ class WNPBackend(QObject):
     def next(self):
         self._safe(lambda: self._controls().try_skip_next())
 
+    def set_playing(self, play: bool):
+        """Orden EXPLÍCITA de reproducir o pausar (la interfaz sabe qué acaba
+        de pedir el usuario). `toggle_play_pause` decide con el estado que
+        tenía pywnp en ese instante: con dos clics seguidos ambos leían el
+        mismo estado viejo y mandaban la misma orden dos veces."""
+        if play and self._running and self.has_no_player():
+            self.noPlayerPlayRequested.emit()
+            return
+        if play:
+            self._safe(lambda: self._controls().try_play())
+        else:
+            self._safe(lambda: self._controls().try_pause())
+
     def seek_percent(self, percent: float):
+        percent = self._clean_number(percent, 0.0, 100.0)
+        if percent is None:
+            return
         self._safe(lambda: self._controls().try_set_position_percent(percent))
 
     def set_volume(self, volume: int):
-        self._safe(lambda: self._controls().try_set_volume(int(volume)))
+        volume = self._clean_number(volume, 0.0, 100.0)
+        if volume is None:
+            return
+        if self._app_vol_names and self._app_volume is not None:
+            names = self._app_vol_names
+            with soft("backend.app_volume.set"):
+                if self._app_volume.set(names, volume / 100.0):
+                    # Lo pedido se ve ya (si no, el siguiente sondeo leería el valor viejo).
+                    self._app_vol_value = volume / 100.0
+                    self._app_vol_at = time.monotonic()
+            return
+        self._safe(lambda: self._controls().try_set_volume(int(round(volume))))
+
+    @staticmethod
+    def _clean_number(value, lo: float, hi: float):
+        """Valor numérico acotado a [lo, hi], o None si no es un número
+        válido (NaN, infinito, texto). Antes un valor raro llegaba tal cual al
+        reproductor o disparaba una notificación de error."""
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        if number != number or number in (float("inf"), float("-inf")):
+            return None
+        return max(lo, min(hi, number))
 
     def toggle_shuffle(self):
         self._safe(lambda: self._controls().try_toggle_shuffle_active())
@@ -305,5 +434,5 @@ class WNPBackend(QObject):
             return
         try:
             fn()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             self.serverError.emit(f"No se pudo ejecutar el control: {exc}")

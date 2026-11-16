@@ -148,8 +148,8 @@ const NO_AD_PLAYER = (inner) => '<div id="movie_player" class="html5-video-playe
   {
     const e = makeEnv(AD_PLAYER('<button class="ytp-skip-ad-button" id="skip">Saltar</button>'), { noGM: true });
     const c = spy(e.doc.getElementById('skip')); await sleep(900);
-    check('sin APIs GM_* (otro gestor de scripts) funciona con localStorage', c.n === 1 && e.w.localStorage.getItem('wnp_autoskip_skipped') === '1',
-      'clics=' + c.n + ' ls=' + e.w.localStorage.getItem('wnp_autoskip_skipped')); e.close();
+    check('sin APIs GM_* (otro gestor de scripts) funciona con localStorage', c.n === 1 && e.w.localStorage.getItem('yefriplayer_autoskip_skipped') === '1',
+      'clics=' + c.n + ' ls=' + e.w.localStorage.getItem('yefriplayer_autoskip_skipped')); e.close();
   }
   {
     const e = makeEnv(AD_PLAYER('<button class="ytp-skip-ad-button" id="skip">Saltar</button>'));

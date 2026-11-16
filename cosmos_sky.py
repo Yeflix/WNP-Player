@@ -106,7 +106,7 @@ class CosmosSky:
         rng = random.Random(7)   # mismo cielo en cada arranque
         count = max(28, min(150, (w * h) // 6500))
         p.setPen(Qt.PenStyle.NoPen)
-        for i in range(count):
+        for _ in range(count):
             x, y = rng.uniform(0, w), rng.uniform(0, h)
             roll = rng.random()
             if roll < 0.72:      # estrella chica

@@ -110,7 +110,7 @@ with socket.socket() as busy:
     busy.bind(("127.0.0.1", 0)); busy.listen(1); bp = busy.getsockname()[1]
     r = subprocess.run([sys.executable, os.path.join(ROOT, "tools", "diagnostico_anuncios.py"), "--port", str(bp)],
                        capture_output=True, text=True, timeout=30)
-    check("puerto ocupado: avisa que hay que cerrar la app y sale con código 2", r.returncode == 2 and "Cierra WNP Player" in r.stdout, r.stdout[-120:])
+    check("puerto ocupado: avisa que hay que cerrar la app y sale con código 2", r.returncode == 2 and "Cierra YefriPlayer" in r.stdout, r.stdout[-120:])
 
 print(f"\nRESULTADO: {len(PASS)} ok, {len(FAIL)} fallas")
 for f in FAIL: print("  FALLA:", f)

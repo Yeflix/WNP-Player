@@ -104,6 +104,7 @@ from cover_loader import CoverArtLoader
 import dock_window as dk
 be = WNPBackend(); calls = []
 be.toggle_play_pause = lambda: calls.append("toggle")
+be.set_playing = lambda play: calls.append("toggle")      # el clic ahora manda play/pausa explícito
 dock = dk.DockWindow(be, CoverArtLoader()); dock.show(); app.processEvents()
 try:
     dock._on_play_clicked()

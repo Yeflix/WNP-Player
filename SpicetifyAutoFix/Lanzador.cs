@@ -21,7 +21,9 @@
 //           se aplica en silencio y la proxima vez que lo abras ya esta listo;
 //         - al abrirse: si lo abriste tu (tiene ventana visible) se puede aplicar
 //           ya; si arranco solo en la bandeja (inicio de Windows) NO se reinicia
-//           delante de ti: se espera a que lo cierres.
+//           delante de ti: se espera a que lo cierres o a que abras su ventana;
+//         - si Spotify se actualiza y se reinicia solo (entre dos sondeos);
+//         - y, como red de seguridad, una vez por hora sin reiniciar nada.
 //
 // No abre red, no escribe archivos propios, solo ejecuta el .ps1 que tiene al lado.
 // Se compila en tu equipo con Instalar-AutoFix.ps1 (Add-Type). Codigo compatible
@@ -40,6 +42,8 @@ static class Lanzador
     // matar este proceso y el powershell hijo quedaria vivo.
     const int LimiteMs = 14 * 60 * 1000;
     const int SondeoMs = 4000;
+    // Comprobacion de seguridad cada hora aunque no haya pasado nada.
+    const int PeriodicaMs = 60 * 60 * 1000;
     const string NombreSpotify = "Spotify";
 
     static int Main(string[] args)
@@ -112,6 +116,10 @@ static class Lanzador
             // abierto o esta en la bandeja, y asi se arregla en silencio.
             Comprobar(dir, script, extra);
             bool corriendo = SpotifyCorriendo();
+            DateTime inicio = InicioSpotify();
+            bool ventana = corriendo && SpotifyTieneVentana();
+            DateTime ultimaPorVentana = DateTime.MinValue;
+            DateTime proximaPeriodica = DateTime.UtcNow.AddMilliseconds(PeriodicaMs);
             List<DateTime> seguimientos = new List<DateTime>();
 
             while (true)
@@ -119,10 +127,19 @@ static class Lanzador
                 Thread.Sleep(SondeoMs);
                 DateTime ahora = DateTime.UtcNow;
                 bool hay = SpotifyCorriendo();
+                DateTime inicioAhora = hay ? InicioSpotify() : DateTime.MinValue;
 
-                if (hay != corriendo)
+                // Spotify se actualiza solo y se reinicia en menos de lo que tarda un
+                // sondeo: el proceso "nunca se cerro" pero es otro. Se detecta porque
+                // cambia la hora de inicio del proceso mas antiguo.
+                bool reiniciado = hay && corriendo && inicio != DateTime.MinValue
+                                  && inicioAhora != DateTime.MinValue && inicioAhora != inicio;
+
+                if (hay != corriendo || reiniciado)
                 {
                     corriendo = hay;
+                    inicio = inicioAhora;
+                    ventana = hay && SpotifyTieneVentana();
                     seguimientos.Clear();
                     if (hay)
                     {
@@ -140,6 +157,20 @@ static class Lanzador
                         seguimientos.Add(ahora.AddMinutes(2));
                     }
                 }
+                else if (hay)
+                {
+                    // Spotify estaba en la bandeja y el usuario abrio su ventana: es el
+                    // momento en que se puede reiniciar sin sorprender a nadie (antes
+                    // solo se reaccionaba al abrir o cerrar el proceso, y quien deja
+                    // Spotify siempre en la bandeja nunca recibia el arreglo).
+                    bool ventanaAhora = SpotifyTieneVentana();
+                    if (ventanaAhora && !ventana && (ahora - ultimaPorVentana).TotalMinutes >= 10)
+                    {
+                        ultimaPorVentana = ahora;
+                        if (seguimientos.Count == 0) seguimientos.Add(ahora.AddSeconds(5));
+                    }
+                    ventana = ventanaAhora;
+                }
 
                 if (seguimientos.Count > 0 && ahora >= seguimientos[0])
                 {
@@ -147,6 +178,20 @@ static class Lanzador
                     Comprobar(dir, script, extra);
                     // Si la comprobacion reinicio Spotify, no contarlo como un evento nuevo.
                     corriendo = SpotifyCorriendo();
+                    inicio = corriendo ? InicioSpotify() : DateTime.MinValue;
+                    ventana = corriendo && SpotifyTieneVentana();
+                    proximaPeriodica = DateTime.UtcNow.AddMilliseconds(PeriodicaMs);
+                }
+                else if (ahora >= proximaPeriodica)
+                {
+                    // Red de seguridad por si se escapo algun evento. Nunca reinicia
+                    // Spotify delante del usuario: si esta abierto, solo deja anotado
+                    // y espera a que se cierre. La comprobacion es barata (usa la
+                    // huella guardada, no relee los archivos de Spotify).
+                    proximaPeriodica = ahora.AddMilliseconds(PeriodicaMs);
+                    List<string> args = new List<string>(extra);
+                    if (corriendo && !args.Contains("-EsperarSpotifyCerrado")) args.Add("-EsperarSpotifyCerrado");
+                    Ejecutar(dir, script, args);
                 }
             }
         }
@@ -175,6 +220,36 @@ static class Lanzador
         catch
         {
             return false;
+        }
+        finally
+        {
+            if (ps != null) foreach (Process p in ps) p.Dispose();
+        }
+    }
+
+    // Hora de inicio del proceso Spotify mas antiguo (MinValue si no hay o no se
+    // puede leer). Sirve para notar que Spotify se reinicio entre dos sondeos.
+    static DateTime InicioSpotify()
+    {
+        Process[] ps = null;
+        try
+        {
+            ps = Process.GetProcessesByName(NombreSpotify);
+            DateTime min = DateTime.MaxValue;
+            foreach (Process p in ps)
+            {
+                try
+                {
+                    DateTime t = p.StartTime.ToUniversalTime();
+                    if (t < min) min = t;
+                }
+                catch { }
+            }
+            return min == DateTime.MaxValue ? DateTime.MinValue : min;
+        }
+        catch
+        {
+            return DateTime.MinValue;
         }
         finally
         {

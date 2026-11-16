@@ -17,6 +17,7 @@ from dialogs import HotkeyDialog, SettingsDialog, HistoryDialog, StatsDialog, Re
 from onboarding import WelcomeWizard
 from weekly_recap import WeeklyRecapToast
 from scrobbling import ScrobbleManager
+import updater
 from spotify_theme import SpotifyThemeBridge, make_theme_menu
 import datetime
 import time
@@ -25,6 +26,7 @@ import player_launcher
 from likes import LikeManager
 import ad_log
 import history
+import stats_store
 import stats
 
 # Cada cuánto se autoguarda la posición/tamaño de ventana mientras la app
@@ -64,6 +66,19 @@ class AppController(QObject):
         self.mini_window = MiniWindow(self.backend, self.cover_loader)
         self.dock_window = DockWindow(self.backend, self.cover_loader, lyrics_loader=self.lyrics_loader)
         self.main_window.setWindowIcon(self.icon)
+        # Icono de TODA la aplicación: mini, dock, diálogos y avisos también lo muestran en la
+        # barra de tareas / Alt+Tab (antes solo la ventana principal lo tenía).
+        QApplication.setWindowIcon(self.icon)
+
+        # Visualizador de audio: un solo servicio; solo captura cuando está
+        # activado, suena música y hay una ventana mostrándolo.
+        from audio_levels import AudioLevels
+        import process_loopback
+        self.audio_levels = AudioLevels(
+            self, per_app_factory=(process_loopback.ProcessLoopbackSource
+                                   if process_loopback.availability()[0] else None))
+        self.main_window.set_audio_levels(self.audio_levels)
+        self.dock_window.set_audio_levels(self.audio_levels)
 
         # Puente con el tema de Spicetify (Cosmos / Cover / YefriDev...). Se
         # crea antes de la bandeja porque su menú incluye "Tema de Spotify".
@@ -74,6 +89,20 @@ class AppController(QObject):
         self.main_window.set_theme_bridge(self.theme_bridge)
 
         self.tray = self._build_tray()
+
+        # Actualizaciones (updater.py): consulta diaria en segundo plano.
+        self._update_info = None
+        self._update_message_at = 0.0     # monotonic del último aviso de versión nueva en la bandeja
+        self.updater = updater.UpdateChecker(self)
+        self.updater.checked.connect(self._on_update_checked)
+        self.updater.downloaded.connect(self._on_update_downloaded)
+        self.tray.messageClicked.connect(self._on_tray_message_clicked)
+
+        # Botones en la miniatura de la barra de tareas (opcional, al reiniciar).
+        self.thumbbar = None
+        self._setup_taskbar_button()
+        # La pantalla de carga (main.py) se quita antes de la bienvenida.
+        self.on_before_welcome = None
 
         self._wire_windows()
         self._fade_anims = {}  # ventana -> QPropertyAnimation de fundido en curso
@@ -103,11 +132,9 @@ class AppController(QObject):
         self.hotkeys.triggered.connect(self._on_hotkey_triggered)
 
         self.backend.serverError.connect(self._on_server_error)
-        self.backend.logMessage.connect(
-            lambda level, msg: print(f"[WNP:{level}] {msg}")
-        )
+        self.backend.logMessage.connect(self._on_backend_log)
         self.backend.started.connect(lambda p: self.tray.showMessage(
-            "WNP Player", f"Escuchando en el puerto {p}. Conecta la extensión del navegador.",
+            "YefriPlayer", f"Escuchando en el puerto {p}. Conecta la extensión del navegador.",
             self.icon, 4000
         ))
         self.backend.stateChanged.connect(self._on_playback_state_changed)
@@ -135,7 +162,10 @@ class AppController(QObject):
         self._restore_config()
 
     # ------------------------------------------------------------- arranque
-    def start(self):
+    def start(self, show_welcome: bool = False, from_autostart: bool = False):
+        """`show_welcome`: el instalador lo pide tras una instalación nueva
+        (--bienvenida). `from_autostart`: arrancó «Iniciar con Windows»
+        (--inicio-windows); solo entonces se respeta «Iniciar minimizado»."""
         self.backend.start()
         if self.config.spotify_theme_enabled:
             self.theme_bridge.start()
@@ -145,7 +175,11 @@ class AppController(QObject):
         # su ruta de inicio.
         self._apply_start_with_windows(self.config.start_with_windows)
 
-        if not self.config.onboarding_completed:
+        import onboarding
+        if (show_welcome or not self.config.onboarding_completed
+                or self.config.welcome_revision < onboarding.WELCOME_REVISION):
+            if callable(self.on_before_welcome):
+                self.on_before_welcome()
             # Primera ejecución (da igual si es `python main.py` o el
             # `.exe` empaquetado: la condición es el config guardado, no
             # la forma de arrancar). El asistente elige el modo por
@@ -155,7 +189,7 @@ class AppController(QObject):
             # se respeta igual).
             self._run_onboarding()
 
-        if self.config.start_minimized:
+        if self.config.start_minimized and from_autostart:
             self.backend.set_poll_interval(IDLE_POLL_INTERVAL_MS)
         elif self._current_mode == "mini":
             self._show_mini()
@@ -167,6 +201,38 @@ class AppController(QObject):
         # Con un pequeño retraso para no competir visualmente con el
         # fundido de entrada de la ventana recién abierta.
         QTimer.singleShot(3000, self._maybe_show_weekly_recap)
+        QTimer.singleShot(20_000, self._auto_check_updates)
+
+    def _on_backend_log(self, level: str, message: str):
+        """Mensajes de pywnp: a la consola (si la hay) y, los avisos y errores,
+        también a error.log. En el .exe sin consola `print` no deja rastro, y
+        sin esto no habría forma de ver qué pasó cuando algo falla en Windows."""
+        print(f"[YefriPlayer:{level}] {message}")
+        if level not in ("Debug", "Info"):
+            import datetime
+            import error_handling
+            stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            error_handling._write_log(f"[{stamp}] [{level}] {message}\n")
+
+    def _visualizer_target(self, state: "PlayerState | None" = None) -> str:
+        """Reproductor que debe escuchar el visualizador ('' = todo el equipo)."""
+        state = state if state is not None else getattr(self, "_current_state", None)
+        if not getattr(self.config, "visualizer_per_app", True) or state is None or not state.has_media:
+            return ""
+        return state.player_name or ""
+
+    def _apply_audio_visualizer(self, enabled: bool):
+        """Activa o desactiva el visualizador de audio. Si no está disponible
+        (no es Windows, falta una librería) queda desactivado, sin errores."""
+        import audio_levels
+        ok, _reason = audio_levels.availability()
+        enabled = bool(enabled) and ok
+        self.config.audio_visualizer = enabled
+        self.audio_levels.set_enabled(enabled)
+        self.audio_levels.set_playing(self._current_state is not None
+                                      and self._current_state.state == "PLAYING")
+        self.main_window.set_audio_visualizer_visible(enabled)
+        self.dock_window.set_audio_visualizer_enabled(enabled)
 
     def _apply_start_with_windows(self, enabled: bool):
         """Aplica "Iniciar con Windows" al registro y guarda lo que quedó
@@ -199,39 +265,83 @@ class AppController(QObject):
         WeeklyRecapToast.position_bottom_right(toast)
         self._weekly_recap_toast = toast  # referencia viva, evita que el GC lo cierre antes de tiempo
 
+    def _welcome_prefs(self, recommended: bool) -> tuple[dict, dict]:
+        """(preferencias, teclas) con las que abre la bienvenida. En la primera
+        ejecución (o tras instalar) las recomendadas; al repasarla a mano, las
+        actuales. Las teclas que el usuario ya tuviera asignadas se respetan."""
+        from config import RECOMMENDED_PREFS, DEFAULT_HOTKEYS
+        cfg = self.config
+        if recommended:
+            prefs = dict(RECOMMENDED_PREFS)
+        else:
+            prefs = {k: bool(getattr(cfg, k, v)) for k, v in RECOMMENDED_PREFS.items()}
+        current = {"play_pause": cfg.hotkey_play_pause, "next": cfg.hotkey_next,
+                   "previous": cfg.hotkey_previous}
+        hotkeys = {a: (current[a] or DEFAULT_HOTKEYS[a]) for a in DEFAULT_HOTKEYS}
+        return prefs, hotkeys
+
+    def _apply_welcome_result(self, wizard):
+        """Aplica TODO lo elegido en la bienvenida (también con «Omitir»: lo que
+        mostraba marcado es lo que queda)."""
+        cfg = self.config
+        prefs = dict(getattr(wizard, "result_prefs", {}) or {})
+        prefs.setdefault("start_with_windows", wizard.result_start_with_windows)
+        self._apply_start_with_windows(prefs["start_with_windows"])
+        if "start_minimized" in prefs:
+            cfg.start_minimized = bool(prefs["start_minimized"])
+            self.main_window.start_minimized_enabled = cfg.start_minimized
+        if "always_on_top" in prefs:
+            cfg.always_on_top = bool(prefs["always_on_top"])
+            self.main_window.set_always_on_top(cfg.always_on_top)
+        for key in ("notifications_enabled", "check_updates", "visualizer_per_app"):
+            if key in prefs:
+                setattr(cfg, key, bool(prefs[key]))
+        if "taskbar_button" in prefs:
+            cfg.taskbar_button = bool(prefs["taskbar_button"])
+            # La ventana completa aún no se ha mostrado: se puede aplicar ya.
+            if cfg.taskbar_button and self.thumbbar is None and not self.main_window.isVisible():
+                self._setup_taskbar_button()
+        if "audio_visualizer" in prefs:
+            self._apply_audio_visualizer(bool(prefs["audio_visualizer"]))
+        hotkeys = getattr(wizard, "result_hotkeys", None)
+        if hotkeys:
+            cfg.hotkey_play_pause = hotkeys.get("play_pause", cfg.hotkey_play_pause)
+            cfg.hotkey_next = hotkeys.get("next", cfg.hotkey_next)
+            cfg.hotkey_previous = hotkeys.get("previous", cfg.hotkey_previous)
+        if "hotkeys_enabled" in prefs:
+            cfg.hotkeys_enabled = bool(prefs["hotkeys_enabled"])
+        self.hotkeys.unregister_all()
+        if cfg.hotkeys_enabled and self.hotkeys.available:
+            self._register_saved_hotkeys()
+        self._current_mode = wizard.result_default_mode
+        cfg.last_mode = self._current_mode
+
     def _run_onboarding(self):
+        import onboarding
+        prefs, hotkeys = self._welcome_prefs(recommended=True)
         wizard = WelcomeWizard(
             port=self.backend.port, initial_mode=self._current_mode,
-            start_with_windows=self.config.start_with_windows,
+            start_with_windows=prefs["start_with_windows"], prefs=prefs, hotkeys=hotkeys,
+            backend=self.backend,           # para comprobar la extensión en vivo
         )
         wizard.exec()  # modal: bloquea hasta "Empezar a usar..." u "Omitir"
-
-        self._apply_start_with_windows(wizard.result_start_with_windows)
-        self._current_mode = wizard.result_default_mode
-        self.config.last_mode = self._current_mode
+        self._apply_welcome_result(wizard)
         self.config.onboarding_completed = True
+        self.config.welcome_revision = onboarding.WELCOME_REVISION
         self.config.save()
 
     def _reopen_onboarding(self):
-        """Vuelve a mostrar el mismo asistente a pedido del usuario (menú
-        contextual → 'Ver bienvenida de nuevo...'), sin tocar
-        onboarding_completed: no es la primera ejecución, solo quiere
-        repasar la guía o cambiar el modo por defecto.
-
-        `initial_mode` arranca la página de modos con el modo ACTUAL ya
-        seleccionado (antes siempre arrancaba en "main" sin importar cuál
-        tenía el usuario) -- si no, tocar "Omitir" sin pasar por esa
-        página pisaba en silencio el modo guardado con "main" cada vez que
-        alguien reabría la guía solo para repasar la parte de la
-        extensión, por ejemplo."""
+        """Vuelve a mostrar el asistente a pedido del usuario (menú contextual →
+        'Ver bienvenida de nuevo...'), con los valores ACTUALES (no los
+        recomendados): repasarlo y pulsar «Omitir» no cambia nada."""
+        prefs, hotkeys = self._welcome_prefs(recommended=False)
         wizard = WelcomeWizard(
             port=self.backend.port, parent=self.main_window, initial_mode=self._current_mode,
-            start_with_windows=self.config.start_with_windows,
+            start_with_windows=prefs["start_with_windows"], prefs=prefs, hotkeys=hotkeys,
+            backend=self.backend,           # para comprobar la extensión en vivo
         )
         wizard.exec()
-        self._apply_start_with_windows(wizard.result_start_with_windows)
-        self._current_mode = wizard.result_default_mode
-        self.config.last_mode = self._current_mode
+        self._apply_welcome_result(wizard)
         self.config.save()
 
     def shutdown(self):
@@ -241,13 +351,24 @@ class AppController(QObject):
         self._settle_timer.stop()
         self._autosave_timer.stop()
         self._save_config()
+        self.audio_levels.shutdown()
         self.hotkeys.unregister_all()
+        if self.thumbbar is not None:
+            self.thumbbar.close()
         self.backend.stop()
         self.theme_bridge.stop()
         self.tray.hide()
         toast = getattr(self, "_weekly_recap_toast", None)
         if toast is not None:
             toast.close()
+
+    def visible_window(self):
+        """La ventana del modo actual si está a la vista (para que la pantalla de
+        carga se transforme en ella), o None si arrancó en la bandeja."""
+        for window in (self.main_window, self.mini_window, self.dock_window):
+            if window.isVisible():
+                return window
+        return None
 
     def show_current(self):
         """Llamado por SingleInstanceGuard cuando alguien intenta abrir una
@@ -307,7 +428,7 @@ class AppController(QObject):
 
     def _start_player(self, action: str):
         if not player_launcher.launch(action):
-            self.tray.showMessage("WNP Player",
+            self.tray.showMessage("YefriPlayer",
                                   "No se pudo abrir el reproductor. Ábrelo manualmente.",
                                   self.icon, 5000)
             return
@@ -335,6 +456,13 @@ class AppController(QObject):
     def _on_playback_state_changed(self, state: PlayerState):
         self._maybe_autoplay(state)
         self._current_state = state
+        self.audio_levels.set_target(self._visualizer_target(state))
+        self.audio_levels.set_playing(state.state == "PLAYING")
+        self.scrobbler.set_playing(state.state == "PLAYING")   # las pausas no cuentan como escuchado
+        self._update_tray_tooltip(state)
+        if self.thumbbar is not None:
+            self.thumbbar.set_state(state.state == "PLAYING", state.has_media,
+                                    self.tray_tooltip_text(state))
         if not state.has_media:
             self._settle_timer.stop()
             self._pending_track_key = None
@@ -394,6 +522,29 @@ class AppController(QObject):
         if self.config.notifications_enabled and state.state == "PLAYING":
             self._show_track_notification(state)
 
+    # Windows corta el texto del icono de la bandeja a 127 caracteres.
+    TRAY_TOOLTIP_MAX = 127
+
+    @classmethod
+    def tray_tooltip_text(cls, state: PlayerState) -> str:
+        """«Título — Artista» con el estado, para el icono de la bandeja (antes
+        solo decía «YefriPlayer» y había que abrir la ventana para saber qué sonaba)."""
+        if not state.has_media or not state.title:
+            return "YefriPlayer · controlador multimedia"
+        song = f"{state.title} — {state.artist}" if state.artist else state.title
+        suffix = {"PAUSED": " (en pausa)", "STOPPED": " (detenido)"}.get(state.state, "")
+        head = "YefriPlayer\n"
+        room = cls.TRAY_TOOLTIP_MAX - len(head) - len(suffix)
+        if len(song) > room:
+            song = song[:max(1, room - 1)].rstrip() + "…"
+        return head + song + suffix
+
+    def _update_tray_tooltip(self, state: PlayerState):
+        text = self.tray_tooltip_text(state)
+        if text != getattr(self, "_tray_tooltip", None):   # solo cuando cambia (no en cada sondeo)
+            self._tray_tooltip = text
+            self.tray.setToolTip(text)
+
     def _on_cover_ready_for_tray(self, url: str, image):
         """Ícono de bandeja dinámico: apenas termina de bajar la carátula
         de la canción actual, se usa como ícono en miniatura en vez del
@@ -445,6 +596,7 @@ class AppController(QObject):
         self.dock_window.set_style(cfg.dock_style)
         self.dock_window.set_waves_enabled(cfg.bar_waves_enabled)
 
+        self._apply_audio_visualizer(cfg.audio_visualizer)
         self.main_window.set_always_on_top(cfg.always_on_top)
         self.main_window.start_minimized_enabled = cfg.start_minimized
         self.main_window.set_lyrics_panel_side(cfg.lyrics_panel_side)
@@ -465,6 +617,25 @@ class AppController(QObject):
         for action, combo in combos.items():
             if combo:
                 self.hotkeys.register(action, combo)
+        if self.hotkeys.failures:
+            # Se avisa un poco después de arrancar (la bandeja ya muestra otros avisos al inicio).
+            QTimer.singleShot(4000, self._report_hotkey_failures)
+
+    HOTKEY_NAMES = {"play_pause": "Reproducir / pausar", "next": "Siguiente", "previous": "Anterior"}
+
+    def hotkey_failure_text(self) -> str:
+        from hotkeys import combo_to_display
+        parts = [f"{combo_to_display(combo).replace('Space', 'Espacio')} ({self.HOTKEY_NAMES.get(a, a)}): {why}"
+                 for a, (combo, why) in self.hotkeys.failures.items()]
+        return "; ".join(parts)
+
+    def _report_hotkey_failures(self):
+        if self._shut_down or not self.hotkeys.failures:
+            return
+        self.tray.showMessage(
+            "YefriPlayer: tecla rápida sin activar",
+            self.hotkey_failure_text() + ". Elige otra en Configuración → Teclas.",
+            self.icon, 8000)
 
     def _apply_window_opacity(self, value: float):
         """Se aplica en caliente (a diferencia de font_scale/high_contrast):
@@ -526,7 +697,7 @@ class AppController(QObject):
     # -------------------------------------------------------------- bandeja
     def _build_tray(self) -> QSystemTrayIcon:
         tray = QSystemTrayIcon(self.icon)
-        tray.setToolTip("WNP Player")
+        tray.setToolTip("YefriPlayer · controlador multimedia")
 
         menu = QMenu()
         self.tray_playpause_action = menu.addAction("Reproducir / Pausar")
@@ -540,6 +711,7 @@ class AppController(QObject):
         menu.addMenu(make_theme_menu("Tema de Spotify", self.theme_bridge, menu))
         menu.addAction("Configuración...", self._open_settings_dialog)
         menu.addAction("Registro de anuncios (CSV)...", self._open_ad_log)
+        self.tray_update_action = menu.addAction("Buscar actualizaciones...", self._on_tray_update_action)
         menu.addSeparator()
         menu.addAction("Salir", self._quit)
         tray.setContextMenu(menu)
@@ -552,7 +724,7 @@ class AppController(QObject):
         p = ad_log.path()
         if not p.exists():
             self.tray.showMessage(
-                "WNP Player", "Todavía no se registró ningún anuncio de Spotify.",
+                "YefriPlayer", "Todavía no se registró ningún anuncio de Spotify.",
                 self.icon, 3000,
             )
             return
@@ -575,6 +747,7 @@ class AppController(QObject):
             theme_bridge=self.theme_bridge,
             theme_enabled=self.config.spotify_theme_enabled,
             parent=self.main_window,
+            hotkey_failures=lambda: dict(self.hotkeys.failures),
         )
         dlg.on_likes_changed = self._on_likes_account_changed
         if dlg.exec() == dlg.DialogCode.Accepted:
@@ -593,6 +766,10 @@ class AppController(QObject):
             cfg.empty_play_action = dlg.result_empty_play_action
             self._apply_play_idle_setting()
             cfg.lyrics_panel_enabled = dlg.result_lyrics_panel_enabled
+            cfg.visualizer_per_app = dlg.result_visualizer_per_app
+            self.audio_levels.set_target(self._visualizer_target())
+            self._apply_audio_visualizer(dlg.result_audio_visualizer)
+            cfg.check_updates = dlg.result_check_updates
 
             cfg.dock_edge = dlg.result_dock_edge
             cfg.dock_hide_mode = dlg.result_dock_hide_mode
@@ -613,11 +790,13 @@ class AppController(QObject):
             self.main_window.set_youtube_api_key(cfg.youtube_api_key)
 
             restart_needed = (
-                dlg.result_font_scale != cfg.font_scale
+                dlg.result_taskbar_button != cfg.taskbar_button
+                or dlg.result_font_scale != cfg.font_scale
                 or dlg.result_high_contrast != cfg.high_contrast
                 or dlg.result_ui_scale != cfg.ui_scale
                 or dlg.result_player_theme != cfg.player_theme
             )
+            cfg.taskbar_button = dlg.result_taskbar_button
             cfg.player_theme = dlg.result_player_theme
             cfg.font_scale = dlg.result_font_scale
             cfg.ui_scale = dlg.result_ui_scale
@@ -625,9 +804,9 @@ class AppController(QObject):
             self._save_config()
             if restart_needed:
                 self.tray.showMessage(
-                    "WNP Player",
-                    "El aspecto / tamaño de letra / escala / alto contraste se aplica la "
-                    "próxima vez que abras el reproductor.",
+                    "YefriPlayer",
+                    "El aspecto / tamaño de letra / escala / alto contraste / barra de tareas "
+                    "se aplica la próxima vez que abras el reproductor.",
                     self.icon, 5000,
                 )
 
@@ -648,7 +827,7 @@ class AppController(QObject):
         self.config.spotify_theme_mode = mode_id
 
     def _on_theme_bridge_error(self, message: str):
-        self.tray.showMessage("WNP Player", message, self.icon, 5000)
+        self.tray.showMessage("YefriPlayer", message, self.icon, 5000)
 
     def _open_history_dialog(self):
         dlg = HistoryDialog(
@@ -667,6 +846,7 @@ class AppController(QObject):
             current_artist=state.artist if state.has_media else "",
             parent=self.main_window,
             initial_scroll_pos=self.config.stats_scroll_pos,
+            totals=stats_store.summary(),     # acumuladas, sin el límite de 300
         )
         dlg.exec()
         self.config.stats_scroll_pos = dlg.result_scroll_pos
@@ -845,7 +1025,112 @@ class AppController(QObject):
         if same_as_last and recently_notified:
             return
         self._last_error_notified_at = now
-        self.tray.showMessage("WNP Player", message, self.icon, 5000)
+        self.tray.showMessage("YefriPlayer", message, self.icon, 5000)
+
+    # ------------------------------------------------- barra de tareas (opcional)
+    def _setup_taskbar_button(self):
+        """Con «Mostrar en la barra de tareas», la ventana completa deja de ser
+        Qt.Tool (tiene botón en la barra) y lleva Anterior/Reproducir/Siguiente
+        en su miniatura. Se decide al arrancar, antes de mostrar la ventana."""
+        import sys
+        if not (self.config.taskbar_button and sys.platform == "win32"):
+            return
+        from PyQt6.QtCore import Qt
+        self.main_window.setWindowFlag(Qt.WindowType.Tool, False)
+        try:
+            from taskbar_buttons import ThumbBar
+            bar = ThumbBar(self.main_window, self)
+            if bar.install(QApplication.instance()):
+                bar.actionTriggered.connect(self._on_hotkey_triggered)   # mismas acciones que las teclas
+                self.thumbbar = bar
+        except Exception:
+            import diag
+            diag.note("app_controller._setup_taskbar_button")
+
+    # ------------------------------------------------------- actualizaciones
+    UPDATE_MESSAGE_CLICK_S = 30.0
+
+    def _auto_check_updates(self):
+        # Solo el programa empaquetado busca solo (desde el código se actualiza con
+        # git pull, y así las pruebas nunca salen a la red). A mano, siempre.
+        import version as _v
+        if self._shut_down or not self.config.check_updates or not _v.is_frozen():
+            return
+        if not updater.should_check(self.config.last_update_check):
+            return
+        self.config.last_update_check = datetime.datetime.now().isoformat(timespec="seconds")
+        self._save_config()
+        self.updater.check(manual=False)
+
+    def _on_tray_update_action(self):
+        if self._update_info is not None:
+            self._show_update_dialog()
+        else:
+            self.tray.showMessage("YefriPlayer", "Buscando actualizaciones...", self.icon, 2000)
+            self.updater.check(manual=True)
+
+    def _on_update_checked(self, info, error: str, manual: bool):
+        if self._shut_down:
+            return
+        if error:
+            if manual:
+                self.tray.showMessage("YefriPlayer", error, self.icon, 5000)
+            return
+        if info is None or not updater.is_newer(info.version):
+            if manual:
+                import version as _v
+                self.tray.showMessage("YefriPlayer", f"Tienes la última versión ({_v.APP_VERSION}).",
+                                      self.icon, 4000)
+            return
+        if not manual and info.version == self.config.skipped_update_version:
+            return
+        self._update_info = info
+        self.tray_update_action.setText(f"Actualizar a {info.version}...")
+        if manual:
+            self._show_update_dialog()
+        else:
+            self._update_message_at = time.monotonic()
+            self.tray.showMessage(f"YefriPlayer {info.version} disponible",
+                                  "Haz clic aquí para ver las novedades y actualizar.", self.icon, 8000)
+
+    def _on_tray_message_clicked(self):
+        if self._update_info is not None and \
+                time.monotonic() - self._update_message_at <= self.UPDATE_MESSAGE_CLICK_S:
+            self._show_update_dialog()
+
+    def _show_update_dialog(self):
+        from dialogs import UpdateDialog
+        info = self._update_info
+        if info is None:
+            return
+        installed = updater.is_installed() and bool(info.asset_url)
+        dlg = UpdateDialog(info.version, info.notes, installed=installed, parent=self.main_window)
+        dlg.exec()
+        if dlg.result_action == "skip":
+            self.config.skipped_update_version = info.version
+            self._save_config()
+            self._update_info = None
+            self.tray_update_action.setText("Buscar actualizaciones...")
+        elif dlg.result_action == "update":
+            if installed:
+                self.tray.showMessage("YefriPlayer", f"Descargando la versión {info.version}...",
+                                      self.icon, 4000)
+                self.updater.download(info)
+            else:
+                QDesktopServices.openUrl(QUrl(info.page_url))
+
+    def _on_update_downloaded(self, path: str, error: str):
+        info = self._update_info
+        if error or not path:
+            self.tray.showMessage("YefriPlayer", f"No se pudo descargar la actualización: {error}. "
+                                  "Se abre la página para descargarla a mano.", self.icon, 6000)
+            if info is not None and info.page_url:
+                QDesktopServices.openUrl(QUrl(info.page_url))
+            return
+        try:
+            updater.run_installer(path)   # el instalador cerrará esta copia de forma ordenada
+        except OSError as exc:
+            self.tray.showMessage("YefriPlayer", f"No se pudo abrir el instalador: {exc}", self.icon, 6000)
 
     def _quit(self):
         self.shutdown()

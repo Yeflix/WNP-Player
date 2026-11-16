@@ -29,6 +29,7 @@ import dock_window as dk
 be = WNPBackend(); loader = CoverArtLoader()
 calls = []
 be.toggle_play_pause = lambda: calls.append("play")
+be.set_playing = lambda play: calls.append("play")   # el clic manda una orden explícita
 be.next = lambda: calls.append("next")
 be.previous = lambda: calls.append("prev")
 

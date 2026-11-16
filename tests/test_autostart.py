@@ -33,20 +33,31 @@ check("por defecto está activado", config.AppConfig().start_with_windows is Tru
 check("config sin la clave -> activado", config.AppConfig._sanitize({}) == {} and config.AppConfig().start_with_windows)
 check("sin entrada al inicio", autostart.is_enabled() is False)
 check("activar crea la entrada", autostart.sync(True) and autostart.is_enabled())
-check("el comando entre comillas", store["WNPPlayer"].startswith('"'))
-store["WNPPlayer"] = '"C:\\viejo\\WNP.exe"'
+check("el comando entre comillas", store["YefriPlayer"].startswith('"'))
+store["YefriPlayer"] = '"C:\\viejo\\WNP.exe"'
 autostart.sync(True)
-check("se corrige una ruta vieja", store["WNPPlayer"] == autostart.launch_command())
+check("se corrige una ruta vieja", store["YefriPlayer"] == autostart.launch_command())
 check("desactivar elimina la entrada", autostart.sync(False) and not autostart.is_enabled())
 check("desactivar sin entrada no falla", autostart.sync(False) is True)
 
+# Una entrada de la versión anterior (WNP Player) se elimina al sincronizar
+store["WNPPlayer"] = '"C:\\viejo\\WNPPlayer.exe"'
+autostart.sync(True)
+check("la entrada del nombre anterior se elimina", "WNPPlayer" not in store and "YefriPlayer" in store)
+store["WNPPlayer"] = '"C:\\viejo\\WNPPlayer.exe"'
+autostart.sync(False)
+check("al desactivar también se limpia la entrada anterior", "WNPPlayer" not in store and "YefriPlayer" not in store)
+autostart.sync(True)
+
 # .exe empaquetado: el comando es el propio ejecutable
-sys.frozen = True; real = sys.executable; sys.executable = "C:\\Apps\\WNP Player\\WNP Player.exe"
-check(".exe: comando = ruta del ejecutable entre comillas", autostart.launch_command() == '"C:\\Apps\\WNP Player\\WNP Player.exe"')
+sys.frozen = True; real = sys.executable; sys.executable = "C:\\Apps\\YefriPlayer\\YefriPlayer.exe"
+check(".exe: comando = ruta del ejecutable entre comillas + --inicio-windows",
+      autostart.launch_command() == '"C:\\Apps\\YefriPlayer\\YefriPlayer.exe" --inicio-windows')
 del sys.frozen; sys.executable = real
-check("código fuente: usa main.py", autostart.launch_command().endswith('main.py"'))
+check("código fuente: usa main.py (+ --inicio-windows)", autostart.launch_command().endswith('main.py" --inicio-windows'))
 
 # registro con error -> False, sin excepción
+store.clear()
 fake.CreateKey = lambda *a: (_ for _ in ()).throw(OSError("denegado"))
 check("error de registro -> False", autostart.set_enabled(True) is False)
 

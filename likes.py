@@ -19,7 +19,7 @@ YouTube (Data API v3, alcance youtube.force-ssl):
   - GET  /videos/getRating?id=ID                 (1 unidad de cuota)
   - POST /videos/rate?id=ID&rating=like|none     (50 unidades; cuota diaria 10 000)
 
-Todo corre en hilos (QThreadPool); la interfaz solo recibe `LikeInfo`.
+Todo corre en hilos (hilos de Python, ver workers.py); la interfaz solo recibe `LikeInfo`.
 """
 from __future__ import annotations
 
@@ -32,10 +32,12 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass, replace
 
-from PyQt6.QtCore import QObject, QRunnable, QThreadPool, pyqtSignal
+import workers
+from PyQt6.QtCore import QObject, pyqtSignal
 
 import oauth_pkce
 from lyrics import _sim, clean_artist, clean_title
+import contextlib
 
 SPOTIFY_AUTH_URL = "https://accounts.spotify.com/authorize"
 SPOTIFY_TOKEN_URL = "https://accounts.spotify.com/api/token"
@@ -84,12 +86,10 @@ def _request(method: str, url: str, token: str = "", timeout: float = _TIMEOUT_S
             return resp.status, data
     except urllib.error.HTTPError as exc:
         detail = ""
-        try:
+        with contextlib.suppress(Exception):
             payload = json.loads(exc.read().decode("utf-8") or "{}")
             err = payload.get("error")
             detail = (err.get("message") if isinstance(err, dict) else err) or payload.get("message") or ""
-        except Exception:  # noqa: BLE001
-            pass
         raise ApiError(exc.code, str(detail)) from exc
     except (urllib.error.URLError, TimeoutError) as exc:
         raise ApiError(0, f"Sin conexión con el servicio ({getattr(exc, 'reason', exc)}).") from exc
@@ -268,9 +268,8 @@ class _JobSignals(QObject):
     done = pyqtSignal(int, str, object, str)    # seq, kind, resultado, error
 
 
-class _Job(QRunnable):
+class _Job:
     def __init__(self, seq: int, kind: str, service: str, fn, signals: _JobSignals):
-        super().__init__()
         self._seq, self._kind, self._service, self._fn, self._signals = seq, kind, service, fn, signals
 
     def run(self):
@@ -279,12 +278,10 @@ class _Job(QRunnable):
             result = self._fn()
         except ApiError as exc:
             error = _friendly(self._service, exc)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             error = f"Error inesperado: {exc}"
-        try:
+        with contextlib.suppress(RuntimeError):  # la app se está cerrando
             self._signals.done.emit(self._seq, self._kind, result, error)
-        except RuntimeError:
-            pass    # la app se está cerrando
 
 
 class LikeManager(QObject):
@@ -294,7 +291,7 @@ class LikeManager(QObject):
     def __init__(self, config, parent=None):
         super().__init__(parent)
         self.config = config
-        self._pool = QThreadPool.globalInstance()
+        self._pool = workers.default_pool()
         self._signals = _JobSignals()
         self._signals.done.connect(self._on_done)
         self._seq = 0

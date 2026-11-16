@@ -172,16 +172,14 @@ tray_texts = [a.text() for a in ctrl.tray.contextMenu().actions()]
 check("menú de la bandeja sin 'Ver letra...'", not any("Ver letra" in t for t in tray_texts), str(tray_texts))
 check("el controlador ya no tiene _open_lyrics_dialog", not hasattr(ctrl, "_open_lyrics_dialog"))
 
-print("== Asistente de bienvenida")
+print("== Asistente de bienvenida (simple: 3 pasos)")
 wz = onboarding.WelcomeWizard(1234); wz.show(); pump(0.2)
 texts = [l.text() for l in wz.findChildren(QLabel)]
-check("menciona los TRES modos (antes decía 'Dos interfaces')", any("Tres modos" in t for t in texts) and not any("Dos interfaces" in t for t in texts))
-wz._page_index = 1; wz._pending_page_index = 1; wz.stack.setCurrentIndex(1); pump(0.3)
-ys = []
-for title in ("Completo", "Compacto", "Panel lateral"):
-    lab = [l for l in wz.findChildren(QLabel) if l.text() == title][0]
-    ys.append(lab.mapTo(wz, lab.rect().topLeft()).y())
-check("los títulos de las 3 tarjetas están a la misma altura", len(set(ys)) == 1, str(ys))
+check("3 pasos cortos", wz.stack.count() == 3)
+check("dice que es un controlador y no reproduce audio", any("No reproduce audio" in t for t in texts))
+check("la escena 3D de sonido ocupa la parte de arriba", wz.stage.height() >= 110 and wz.stage.y() < wz.stack.y())
+check("los botones de navegación quedan dentro de la ventana",
+      wz.next_btn.mapTo(wz, wz.next_btn.rect().bottomRight()).y() <= wz.height())
 wz.hide(); wz.deleteLater()
 
 print(f"\nRESULTADO: {len(PASS)} ok, {len(FAIL)} fallas")

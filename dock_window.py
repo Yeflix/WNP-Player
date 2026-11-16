@@ -33,30 +33,41 @@ from __future__ import annotations
 
 import math
 import time
+from collections import deque
 
 from PyQt6.QtCore import (
     Qt, QRectF, QRect, QTimer, pyqtSignal, pyqtProperty,
-    QPropertyAnimation, QEasingCurve, QPoint,
+    QPropertyAnimation, QEasingCurve, QPoint, QPointF,
 )
-from PyQt6.QtGui import QPainter, QColor, QPainterPath, QLinearGradient, QRadialGradient, QCursor, QPen
+from PyQt6.QtGui import (QPainter, QColor, QPainterPath, QLinearGradient, QRadialGradient, QCursor, QPen, QPixmap,
+                         QFont, QFontMetrics)
 from PyQt6.QtWidgets import QWidget, QApplication, QAbstractButton
 
-from theme import Palette
+from theme import Palette, FONT_BODY
 import theme as theme_module
-from widgets import (IconButton, SeekBar, MarqueeLabel, CoverArt, LyricsPanel, LIKE_RGB,
-                     blur_image, _lerp_color)
+from widgets import (sync_accessible_names, IconButton, SeekBar, MarqueeLabel, CoverArt, LyricsPanel, LIKE_RGB,
+                     blur_image, _lerp_color, OptimisticHold)
 from backend import PlayerState
+import contextlib
 
 RIPPLE_M = 12         # margen transparente alrededor de la píldora para las ondas
                       # (no mueve la píldora: se añade por su lado exterior)
-HANDLE_SIZE = 34 + RIPPLE_M   # grosor de la pestaña (lo que asoma cuando está colapsada)
+WAVE_EXTRA = 16       # espacio exterior ADICIONAL (solo horizontal) para las ondas de audio
+MARGIN_X = RIPPLE_M + WAVE_EXTRA     # margen transparente por el lado exterior de la píldora
+HANDLE_SIZE = 34 + MARGIN_X   # grosor de la pestaña (lo que asoma cuando está colapsada)
 HANDLE_LENGTH = 96    # alto máximo de la pestaña a lo largo del borde (se
                        # recorta solo si el panel actual es más bajo que esto)
 
 # Estilo "card" (el original): panel vertical, carátula grande arriba.
-CARD_WIDTH = 248
-CARD_HEIGHT = 408
-CARD_COVER_SIZE = 148
+# 1.5.6: la tarjeta pasa de 186 a 208 px de ancho útil y su alto se adapta a la
+# pantalla (entre CARD_MIN_HEIGHT y CARD_HEIGHT); la carátula crece o encoge con él.
+CARD_WIDTH = 270 + WAVE_EXTRA   # el extra es margen transparente para las ondas
+CARD_HEIGHT = 432               # alto máximo
+CARD_MIN_HEIGHT = 330           # por debajo de esto ya no cabe con dignidad
+CARD_SCREEN_MARGIN = 24         # aire que se deja arriba y abajo en pantallas bajas
+CARD_COVER_SIZE = 180           # carátula máxima
+CARD_COVER_MIN = 96
+CARD_PAD = 16
 
 # Estilo "compact": mismo tamaño y layout que la barra real del modo
 # compacto (BASE_BAR_W/BASE_BAR_H en mini_window.py), sin el vinilo — una
@@ -65,15 +76,17 @@ CARD_COVER_SIZE = 148
 # el reproductor"). Horizontal, no vertical, aunque siga saliendo de un
 # borde vertical (izquierda/derecha): es exactamente lo que se pidió.
 WAVE_DOT_W, WAVE_DOT_H = 34, 42   # el círculo de ondas de la pestaña (más grande que antes)
-COMPACT_BAR_W = 380     # = BASE_BAR_W de mini_window.py (antes 300: el título quedaba con 86 px)
-COMPACT_BAR_H = 96     # más que BASE_BAR_H (74): mini_window tiene margen
+COMPACT_BAR_W = 412     # 1.5.6: +32 px para el botón de subir en la fila de controles
+COMPACT_BAR_H = 100    # más que BASE_BAR_H (74): mini_window tiene margen
                         # extra reservado arriba para el vinilo que acá no
                         # hace falta, y la barra vertical de la pestaña ahora
                         # lleva 3 botones apilados (mostrar/ocultar, play,
                         # siguiente) que necesitan >= 24 px de alto cada uno
                         # (tamaño mínimo de objetivo táctil, WCAG 2.5.8).
                         # Antes era 84.
-COMPACT_COVER_SIZE = 56
+COMPACT_COVER_SIZE = 76     # 1.5.6: antes 56 (ahora ocupa el alto útil de la barra)
+COMPACT_PAD = 12
+TIME_W = 34                 # ancho de cada tiempo junto a la barra del compacto
 
 
 class DockWindow(QWidget):
@@ -96,6 +109,15 @@ class DockWindow(QWidget):
         self._waves_enabled = True       # ondas alrededor de la barra (ver set_waves_enabled)
         self._is_playing = False
         self._ripple_t0 = time.monotonic()
+        self._ripple_frames: dict[int, QPixmap] = {}      # ver _paint_ripples
+        self._ripple_key = None
+        # Ondas con audio real (ver audio_levels.py): se guardan los últimos contornos del
+        # espectro y se dibujan alejándose de la píldora, con eco que se desvanece.
+        self._audio_levels = None
+        self._audio_enabled = False        # opción "Visualizador de audio" de Configuración
+        self._contours = deque(maxlen=10)  # (instante, bandas)
+        self._live_bands: list = []
+        self._live_at = 0.0
         self._like_info = None
 
         self._edge = "right"          # "left" | "right" — ver set_edge()
@@ -133,7 +155,10 @@ class DockWindow(QWidget):
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint)
         self.setWindowFlag(Qt.WindowType.Tool)  # sin entrada en la barra de tareas
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setFixedSize(CARD_WIDTH, CARD_HEIGHT)
+        self._chip_rect = QRectF()            # «Sonando · Spotify» (tarjeta)
+        self._time_rects = (QRectF(), QRectF())
+        self._bar_separators: list[float] = []
+        self.setFixedSize(*self._panel_dims())
 
         self._build_ui()
         self._wire_events()
@@ -153,11 +178,12 @@ class DockWindow(QWidget):
         # Ondas alrededor de la barra: solo repinta la franja de la pestaña.
         self._ripple_timer = QTimer(self)
         self._ripple_timer.setTimerType(Qt.TimerType.PreciseTimer)
-        self._ripple_timer.setInterval(40)      # 25 fps: sobra para ondas lentas y cuesta ~20 % menos
+        self._ripple_timer.setInterval(33)      # = el del círculo de la pestaña: coinciden y Qt junta los repintados
         self._ripple_timer.timeout.connect(self._ripple_tick)
 
         self.cover_loader.coverReady.connect(self._on_cover_ready)
         self.cover_loader.colorsReady.connect(self._on_colors_ready)
+        self._play_hold = OptimisticHold(1.2)   # orden de play/pausa aún sin confirmar
         self.backend.stateChanged.connect(self.apply_state)
         self.apply_state(PlayerState())
 
@@ -168,20 +194,34 @@ class DockWindow(QWidget):
         self.restore_btn = IconButton("chevron_up", size=22, icon_scale=0.55, parent=self)
         self.restore_btn.setToolTip("Reproductor completo")
 
-        self.cover = CoverArt(size=CARD_COVER_SIZE, radius_ratio=0.16, parent=self)
-        self.cover_small = CoverArt(size=COMPACT_COVER_SIZE, radius_ratio=0.2, parent=self)
+        self.cover = CoverArt(size=CARD_COVER_SIZE, radius_ratio=0.14, parent=self)
+        self.cover_small = CoverArt(size=COMPACT_COVER_SIZE, radius_ratio=0.18, parent=self)
         self.cover_small.setVisible(False)
         self.title_label = MarqueeLabel("Sin reproducción", self, align=Qt.AlignmentFlag.AlignHCenter)
-        self.artist_label = MarqueeLabel("WNP Player", self, align=Qt.AlignmentFlag.AlignHCenter)
+        self.artist_label = MarqueeLabel("YefriPlayer", self, align=Qt.AlignmentFlag.AlignHCenter)
+        # Jerarquía clara: antes título y artista salían con la misma fuente y color.
+        title_font = QFont(FONT_BODY)
+        title_font.setPixelSize(15)
+        title_font.setWeight(QFont.Weight.Bold)
+        artist_font = QFont(FONT_BODY)
+        artist_font.setPixelSize(12)
+        artist_font.setWeight(QFont.Weight.DemiBold)
+        self.title_label.setFont(title_font)
+        self.title_label.set_color(Palette.c(Palette.TEXT))
+        self.artist_label.setFont(artist_font)
+        self.artist_label.set_color(Palette.c(Palette.TEXT_DIM))
+        self._small_font = QFont(FONT_BODY)
+        self._small_font.setPixelSize(11)
+        self._small_font.setWeight(QFont.Weight.DemiBold)
 
-        self.prev_btn = IconButton("prev", size=30, icon_scale=0.5, parent=self)
-        self.play_btn = IconButton("play", size=42, icon_scale=0.42, gradient_bg=True, parent=self)
-        self.next_btn = IconButton("next", size=30, icon_scale=0.5, parent=self)
+        self.prev_btn = IconButton("prev", size=34, icon_scale=0.48, parent=self)
+        self.play_btn = IconButton("play", size=48, icon_scale=0.4, gradient_bg=True, parent=self)
+        self.next_btn = IconButton("next", size=34, icon_scale=0.48, parent=self)
         self.prev_btn.setToolTip("Anterior")
         self.play_btn.setToolTip("Reproducir / Pausar")
         self.next_btn.setToolTip("Siguiente")
 
-        self.seek_bar = SeekBar(self, height=12, bar_height=4)
+        self.seek_bar = SeekBar(self, height=14, bar_height=4)
 
         # --- Botones de la pestaña (barra vertical, SIEMPRE visible aunque el
         # panel esté colapsado) ---
@@ -243,10 +283,15 @@ class DockWindow(QWidget):
             self.bar_toggle_btn.setFixedSize(24, 24)
             self.bar_play_btn.setFixedSize(28, 28)
             self.bar_next_btn.setFixedSize(24, 24)
+            side, play = 30, 40
         else:
             self.bar_toggle_btn.setFixedSize(26, 26)
             self.bar_play_btn.setFixedSize(32, 32)
             self.bar_next_btn.setFixedSize(26, 26)
+            side, play = 34, 48
+        self.prev_btn.setFixedSize(side, side)
+        self.next_btn.setFixedSize(side, side)
+        self.play_btn.setFixedSize(play, play)
         self._sync_toggle()
 
     def _sync_toggle(self):
@@ -271,10 +316,27 @@ class DockWindow(QWidget):
             btn.setEnabled(self._play_enabled(state))
 
     def _on_play_clicked(self):
-        # El backend solo expone toggle_play_pause(): antes se llamaba a
-        # backend.pause() / backend.play(), que NO existen, y el botón de play
-        # del dock lanzaba AttributeError en cada clic.
-        self.backend.toggle_play_pause()
+        # Igual que en la ventana principal y la compacta: el ícono cambia al
+        # instante (antes esperaba al siguiente sondeo y se sentía con retraso)
+        # y se manda una orden explícita de reproducir o pausar.
+        if self.backend.has_no_player():
+            self.backend.toggle_play_pause()
+            return
+        will_play = self.play_btn.icon_name != "pause"
+        self._play_hold.set(will_play)
+        for btn in (self.play_btn, self.bar_play_btn):
+            btn.set_icon("pause" if will_play else "play")
+        self.backend.set_playing(will_play)
+        QTimer.singleShot(1300, self._resync_play)
+
+    def _resync_play(self):
+        """Vence el plazo de la orden optimista (ver main_window._resync_controls)."""
+        st = self._last_state
+        if st is None:
+            return
+        playing = self._play_hold.resolve(st.state == "PLAYING")
+        for btn in (self.play_btn, self.bar_play_btn):
+            btn.set_icon("pause" if playing else "play")
 
     # -------------------------------------------------------- configuración
     def set_edge(self, edge: str):
@@ -297,10 +359,9 @@ class DockWindow(QWidget):
 
     def set_style(self, style: str):
         """'card': panel vertical con carátula grande (el diseño original).
-        'compact': misma medida y disposición que la barra del modo
-        compacto real, sin el vinilo — carátula cuadrada chica a la
-        izquierda, título/artista al lado, controles a la derecha y la
-        barra de progreso pegada abajo.
+        'compact': barra horizontal, sin el vinilo — carátula cuadrada a
+        la izquierda, título/artista al lado, controles y «volver» a la
+        derecha y, debajo, la barra de progreso con sus tiempos.
 
         Cambiar de estilo cambia el TAMAÑO de la ventana (no solo cómo se
         acomodan las cosas adentro), así que se fuerza siempre a quedar
@@ -319,6 +380,7 @@ class DockWindow(QWidget):
         self._collapsed = True
         self._slide_progress = 0.0
         self.setFixedSize(w, h)
+        self._sync_scene_pause()
 
         compact = style == "compact"
         if compact:
@@ -345,7 +407,23 @@ class DockWindow(QWidget):
     def _panel_dims(self) -> tuple[int, int]:
         if self._style == "compact":
             return HANDLE_SIZE + COMPACT_BAR_W, COMPACT_BAR_H
-        return CARD_WIDTH, CARD_HEIGHT
+        return CARD_WIDTH, self.card_height_for(self._screen_geometry().height())
+
+    @staticmethod
+    def card_height_for(avail_h: int) -> int:
+        """Alto de la tarjeta para una pantalla con `avail_h` px útiles: el máximo
+        si cabe y, si no, lo que quepa dejando aire arriba y abajo (la carátula
+        se encoge; ver _layout_children_card)."""
+        return int(max(CARD_MIN_HEIGHT, min(CARD_HEIGHT, avail_h - 2 * CARD_SCREEN_MARGIN)))
+
+    def _fit_to_screen(self):
+        """Ajusta el alto a la pantalla actual (al aparecer: puede haber cambiado
+        de monitor o de escala desde la última vez)."""
+        dims = self._panel_dims()
+        if (self.width(), self.height()) != dims:
+            self.setFixedSize(*dims)
+            self._card_bg_size = (0, 0)
+            self._refresh_card_bg()
 
     # -------------------------------------------------------- mostrar/ocultar
     def show_on_edge(self):
@@ -353,7 +431,9 @@ class DockWindow(QWidget):
         siempre colapsada (la pestaña asomando), en el borde configurado."""
         self._collapsed = True
         self._slide_progress = 0.0
+        self._fit_to_screen()
         self._sync_toggle()
+        self._sync_scene_pause()
         self._reposition(animate=False)
         self.show()
         self.raise_()
@@ -428,6 +508,14 @@ class DockWindow(QWidget):
     def setSlideProgress(self, value: float):
         self._slide_progress = value
         self._apply_slide_progress(value)
+        self._sync_scene_pause()
+
+    def _sync_scene_pause(self):
+        """Con el panel recogido la tarjeta queda fuera de la pantalla: la escena 3D
+        de la carátula (sin canción) no tiene que seguir dibujándose."""
+        hidden = self._slide_progress < 0.02
+        self.cover.set_scene_paused(hidden)
+        self.cover_small.set_scene_paused(hidden)
 
     slideProgress = pyqtProperty(float, getSlideProgress, setSlideProgress)
 
@@ -456,8 +544,8 @@ class DockWindow(QWidget):
         h = self._handle_zone()
         vert = 3 + (RIPPLE_M if self._style == "card" else 0)
         if self._edge == "right":
-            return QRectF(h.left() + 3 + RIPPLE_M, h.top() + vert, h.width() - 6 - RIPPLE_M, h.height() - 2 * vert)
-        return QRectF(h.left() + 3, h.top() + vert, h.width() - 6 - RIPPLE_M, h.height() - 2 * vert)
+            return QRectF(h.left() + 3 + MARGIN_X, h.top() + vert, h.width() - 6 - MARGIN_X, h.height() - 2 * vert)
+        return QRectF(h.left() + 3, h.top() + vert, h.width() - 6 - MARGIN_X, h.height() - 2 * vert)
 
     def _layout_children(self):
         content = self._content_zone()
@@ -472,8 +560,10 @@ class DockWindow(QWidget):
         """Acomoda los botones de la pestaña, apilados en vertical y
         centrados en su eje.
 
-        Tarjeta (pestaña alta):  arriba mostrar/ocultar y "volver"; al centro
-        anterior / play / siguiente; abajo el círculo de ondas.
+        Tarjeta (pestaña alta), en tres grupos separados por una rayita:
+        arriba mostrar/ocultar y «volver»; al centro anterior / play /
+        siguiente; abajo letra y «me gusta» sobre el círculo de ondas. Si la
+        pestaña es baja, los grupos se juntan en vez de pisarse.
         Compacto (pestaña baja): mostrar/ocultar, play y siguiente, juntos y
         centrados (sin círculo)."""
         pill = self._pill_rect()
@@ -481,129 +571,167 @@ class DockWindow(QWidget):
         cy = pill.center().y()
         top = pill.top()
         bottom = pill.bottom()
+        self._bar_separators = []
 
-        def put(widget, center_y):
-            widget.move(round(cx - widget.width() / 2), round(center_y - widget.height() / 2))
+        def put(widget, y_top):
+            widget.move(round(cx - widget.width() / 2), round(y_top))
+
+        def stack(widgets, y, gap):
+            for w in widgets:
+                put(w, y)
+                y += w.height() + gap
+            return y - gap
+
+        def height_of(widgets, gap):
+            return sum(w.height() for w in widgets) + gap * max(0, len(widgets) - 1)
 
         if self._style == "compact":
-            gap = 4
-            widgets = [self.bar_toggle_btn, self.bar_play_btn, self.bar_next_btn]
-            total = sum(w.height() for w in widgets) + gap * (len(widgets) - 1)
-            y = cy - total / 2
-            for w in widgets:
-                put(w, y + w.height() / 2)
-                y += w.height() + gap
+            group = [self.bar_toggle_btn, self.bar_play_btn, self.bar_next_btn]
+            stack(group, cy - height_of(group, 4) / 2, 4)
             return
 
-        pad = 10
-        put(self.bar_toggle_btn, top + pad + self.bar_toggle_btn.height() / 2)
-        put(self.bar_restore_btn,
-            top + pad + self.bar_toggle_btn.height() + 4 + self.bar_restore_btn.height() / 2)
-
-        gap = 6
-        group = [self.bar_prev_btn, self.bar_play_btn, self.bar_next_btn]
-        total = sum(w.height() for w in group) + gap * (len(group) - 1)
-        y = cy - total / 2
-        for w in group:
-            put(w, y + w.height() / 2)
-            y += w.height() + gap
-
-        # Letra y "me gusta" debajo del grupo de reproducción (el hueco hasta el círculo).
-        below = y + 8
-        put(self.bar_mic_btn, below + self.bar_mic_btn.height() / 2)
-        put(self.bar_like_btn, below + self.bar_mic_btn.height() + 6 + self.bar_like_btn.height() / 2)
+        pad, sep = 10, 14
+        top_group = [self.bar_toggle_btn, self.bar_restore_btn]
+        mid_group = [self.bar_prev_btn, self.bar_play_btn, self.bar_next_btn]
+        low_group = [w for w in (self.bar_mic_btn, self.bar_like_btn) if not w.isHidden()]
 
         dot_h = 34
         # Más grande que la píldora a propósito: las ondas del círculo salen un poco de ella.
+        dot_top = bottom - pad - dot_h
         self.handle_icon.setGeometry(
-            round(cx - WAVE_DOT_W / 2), round(bottom - pad - dot_h - (WAVE_DOT_H - dot_h) / 2),
-            WAVE_DOT_W, WAVE_DOT_H)
+            round(cx - WAVE_DOT_W / 2), round(dot_top - (WAVE_DOT_H - dot_h) / 2), WAVE_DOT_W, WAVE_DOT_H)
+
+        top_end = stack(top_group, top + pad, 4)
+        low_h = height_of(low_group, 6)
+        low_top = dot_top - 8 - low_h if low_group else dot_top
+        mid_h = height_of(mid_group, 6)
+        mid_top = cy - mid_h / 2
+        # Sin sitio para centrarlo: entre los otros dos grupos, con el aire que haya.
+        free = (low_top - top_end) - mid_h
+        if mid_top < top_end + sep or mid_top + mid_h > low_top - sep:
+            mid_top = top_end + max(4.0, free / 2)
+        mid_end = stack(mid_group, mid_top, 6)
+        if low_group:
+            stack(low_group, max(low_top, mid_end + 8), 6)
+        if mid_top - top_end >= 12:
+            self._bar_separators.append((top_end + mid_top) / 2)
+        if low_group and low_top - mid_end >= 12:
+            self._bar_separators.append((mid_end + low_top) / 2)
 
     def _layout_children_card(self, content: QRectF):
-        pad = 18
+        """Tarjeta: estado arriba («Sonando · Spotify»), carátula, título y
+        artista, barra de progreso con sus tiempos y los controles abajo. La
+        carátula toma el alto que sobre (entre CARD_COVER_MIN y CARD_COVER_SIZE)
+        y, si aun así sobra, el aire se reparte entre los bloques."""
+        pad = CARD_PAD
+        left = content.left() + pad
+        inner_w = content.width() - 2 * pad
         cx = content.left() + content.width() / 2
 
-        # Sin el botón de la esquina (la pestaña ya lo tiene), el bloque
-        # carátula + título + controles + barra se centra verticalmente.
-        block_h = CARD_COVER_SIZE + 16 + 22 + 18 + 14 + 54 + 12
-        cover_y = round(content.top() + max(14.0, (content.height() - block_h) / 2))
-        cover_x = round(cx - CARD_COVER_SIZE / 2)
-        self.cover.move(cover_x, cover_y)
+        chip_h = 20
+        title_h = self.title_label.text_height() + 2
+        artist_h = self.artist_label.text_height() + 2
+        seek_h = self.seek_bar.height()
+        time_h = 14
+        ctrl_h = self.play_btn.height()
+        gaps = [12, 14, 0, 14, 2, 10]   # chip→carátula, carátula→título, título→artista, artista→barra, barra→tiempos, tiempos→controles
+        top_m, bottom_m = 14, 16
+        fixed = top_m + chip_h + title_h + artist_h + seek_h + time_h + ctrl_h + sum(gaps) + bottom_m
+        cover = int(max(CARD_COVER_MIN, min(CARD_COVER_SIZE, inner_w, content.height() - fixed)))
+        extra = max(0.0, content.height() - fixed - cover)
+        # El aire que sobra: un poco tras el estado, tras el artista y al final.
+        gaps[0] += extra * 0.35
+        gaps[3] += extra * 0.3              # el resto (0,35) queda debajo de los controles
 
-        text_w = round(content.width() - 2 * pad)
-        title_y = cover_y + CARD_COVER_SIZE + 16
-        self.title_label.setGeometry(round(content.left() + pad), title_y, text_w, 22)
-        self.artist_label.setGeometry(round(content.left() + pad), title_y + 22, text_w, 18)
-
-        controls_y = title_y + 22 + 18 + 14
-        self.prev_btn.move(round(cx - 56), controls_y + 6)
-        self.play_btn.move(round(cx - 21), controls_y)
-        self.next_btn.move(round(cx + 26), controls_y + 6)
-
-        seek_y = controls_y + 54
-        self.seek_bar.setGeometry(round(content.left() + pad), seek_y, text_w, 12)
+        y = content.top() + top_m
+        self._chip_rect = QRectF(left, y, inner_w, chip_h)
+        y += chip_h + gaps[0]
+        if self.cover.width() != cover:
+            self.cover.setFixedSize(cover, cover)
+        cover_y = round(y)
+        self.cover.move(round(cx - cover / 2), cover_y)
+        y += cover + gaps[1]
+        title_y = round(y)
+        self.title_label.setGeometry(round(left), title_y, round(inner_w), title_h)
+        y += title_h + gaps[2]
+        self.artist_label.setGeometry(round(left), round(y), round(inner_w), artist_h)
+        y += artist_h + gaps[3]
+        seek_y = round(y)
+        self.seek_bar.setGeometry(round(left), seek_y, round(inner_w), seek_h)
+        y += seek_h + gaps[4]
+        self._time_rects = (QRectF(left, y, inner_w / 2, time_h), QRectF(left + inner_w / 2, y, inner_w / 2, time_h))
+        y += time_h + gaps[5]
+        ctrl_cy = y + ctrl_h / 2
+        spacing = 18
+        self.play_btn.move(round(cx - self.play_btn.width() / 2), round(ctrl_cy - self.play_btn.height() / 2))
+        self.prev_btn.move(round(self.play_btn.x() - spacing - self.prev_btn.width()),
+                           round(ctrl_cy - self.prev_btn.height() / 2))
+        self.next_btn.move(round(self.play_btn.x() + self.play_btn.width() + spacing),
+                           round(ctrl_cy - self.next_btn.height() / 2))
 
         # La letra ocupa el lugar de carátula + título/artista (los controles y la
         # barra de progreso siguen visibles debajo).
         if self.lyrics_panel is not None:
-            top = round(content.top()) + 14
+            top = round(self._chip_rect.bottom()) + 8
             self.lyrics_panel.setGeometry(
-                round(content.left()) + 10, top, round(content.width()) - 20, controls_y - 8 - top)
+                round(content.left()) + 10, top, round(content.width()) - 20, seek_y - 10 - top)
 
     def _layout_children_compact(self, content: QRectF):
-        """Misma disposición que la barra real del modo compacto: carátula
-        chica a la izquierda, título/artista al lado, controles a la
-        derecha, barra de progreso pegada abajo — sin vinilo."""
-        pad = 10
-
-        # "Volver al reproductor completo": a 8 px de los bordes cae dentro de la
-        # esquina redondeada de la tarjeta (a 6 px o menos la pisaba) y los
-        # controles bajan un poco para que no se toquen (antes quedaban a 1 px).
-        self.restore_btn.move(
-            round(content.right() - self.restore_btn.width() - 8), round(content.top() + 8)
-        )
-
-        cover_y = round(content.top() + (content.height() - COMPACT_COVER_SIZE) / 2) - 4
-        cover_y = max(round(content.top()) + pad, cover_y)
+        """Barra horizontal: carátula a la izquierda (todo el alto útil); arriba
+        título/artista y los controles con «volver al reproductor» al final;
+        abajo la barra de progreso con sus tiempos a los lados."""
+        pad = COMPACT_PAD
+        cover = int(min(COMPACT_COVER_SIZE, content.height() - 2 * pad))
+        if self.cover_small.width() != cover:
+            self.cover_small.setFixedSize(cover, cover)
         cover_x = round(content.left() + pad)
-        self.cover_small.move(cover_x, cover_y)
+        self.cover_small.move(cover_x, round(content.top() + (content.height() - cover) / 2))
 
-        controls_w = self.prev_btn.width() + self.play_btn.width() + self.next_btn.width() + 16
-        controls_x = round(content.right() - pad - controls_w)
-        row_cy = round(content.top() + content.height() / 2) + 6
-        self.play_btn.move(controls_x + self.prev_btn.width() + 8, row_cy - self.play_btn.height() // 2)
-        self.prev_btn.move(controls_x, row_cy - self.prev_btn.height() // 2)
-        self.next_btn.move(
-            controls_x + self.prev_btn.width() + 8 + self.play_btn.width() + 8,
-            row_cy - self.next_btn.height() // 2,
-        )
+        text_x = cover_x + cover + 12
+        row_cy = content.top() + pad + 22          # centro de la fila de arriba (44 px)
 
-        text_x = cover_x + COMPACT_COVER_SIZE + 10
-        text_w = max(20, controls_x - text_x - 10)
-        # Altura por las métricas reales de la fuente (antes 18 y 16 px fijos,
-        # menos que el alto de línea de una fuente de 12 pt: el texto se cortaba).
+        # «Volver al reproductor completo», al final de la fila de controles: a
+        # >= 8 px de los bordes (la esquina redondeada) y sin tocar a «siguiente».
+        rb = self.restore_btn
+        rb.move(round(content.right() - pad - rb.width()), round(row_cy - rb.height() / 2))
+        gap = 6
+        controls_w = self.prev_btn.width() + self.play_btn.width() + self.next_btn.width() + 2 * gap
+        controls_x = rb.x() - 10 - controls_w
+        x = controls_x
+        for btn in (self.prev_btn, self.play_btn, self.next_btn):
+            btn.move(round(x), round(row_cy - btn.height() / 2))
+            x += btn.width() + gap
+
+        text_w = max(20, controls_x - 10 - text_x)
         th = self.title_label.text_height() + 2
         ah = self.artist_label.text_height() + 2
-        text_top = round(content.top() + pad + 4)
+        text_top = round(row_cy - (th + ah) / 2)
         self.title_label.setGeometry(text_x, text_top, text_w, th)
         self.artist_label.setGeometry(text_x, text_top + th, text_w, ah)
 
-        seek_h = 6
-        seek_y = round(content.bottom() - pad - seek_h)
-        self.seek_bar.setGeometry(
-            round(content.left() + pad), seek_y, round(content.width() - 2 * pad), seek_h
-        )
+        seek_h = self.seek_bar.height()
+        seek_cy = content.bottom() - pad - 8
+        right = content.right() - pad
+        self._time_rects = (QRectF(text_x, seek_cy - 7, TIME_W, 14), QRectF(right - TIME_W, seek_cy - 7, TIME_W, 14))
+        # Sin duración no hay tiempos que mostrar: la barra ocupa todo el ancho.
+        side = TIME_W + 4 if self.time_texts()[1] else 0
+        self.seek_bar.setGeometry(round(text_x + side), round(seek_cy - seek_h / 2),
+                                  round(right - side - (text_x + side)), seek_h)
+        self._chip_rect = QRectF()
 
     # -------------------------------------------------------------- estado
     def apply_state(self, state: PlayerState):
         if self._last_state is not None and self._last_state == state:
             return
+        had_times = bool(self.time_texts()[1])
         self._last_state = state
+        if self._style == "compact" and had_times != bool(self.time_texts()[1]):
+            self._layout_children()          # aparecen o se van los tiempos junto a la barra
 
         self.title_label.setText(state.title or "Sin reproducción")
-        self.artist_label.setText(state.artist or "WNP Player")
+        self.artist_label.setText(state.artist or "YefriPlayer")
 
-        is_playing = state.state == "PLAYING"
+        is_playing = self._play_hold.resolve(state.state == "PLAYING")
         # Panel y pestaña muestran exactamente el mismo estado.
         for btn in (self.play_btn, self.bar_play_btn):
             btn.set_icon("pause" if is_playing else "play")
@@ -621,6 +749,10 @@ class DockWindow(QWidget):
         self._is_playing = is_playing
         self._sync_ripples()
         self._sync_lyrics()
+        # Estado y tiempos se pintan en la tarjeta: solo se repintan sus franjas.
+        for r in (self._chip_rect, *self._time_rects):
+            if not r.isEmpty():
+                self.update(r.adjusted(-2, -2, 2, 2).toAlignedRect())
 
         if state.cover_url != self._current_cover_url:
             self._current_cover_url = state.cover_url
@@ -709,7 +841,11 @@ class DockWindow(QWidget):
         self.bar_like_btn.set_icon("heart" if liked else "heart_outline")
         self.bar_like_btn.set_color_override(LIKE_RGB if liked else None)
         self.bar_like_btn.setToolTip(info.tooltip)
-        self.bar_like_btn.setVisible(self._style == "card" and info.visible)
+        visible = self._style == "card" and info.visible
+        if visible == self.bar_like_btn.isHidden():          # cambia: hay que recolocar la pestaña
+            self.bar_like_btn.setVisible(visible)
+            self._layout_bar(self._handle_zone())
+            self.update(self._handle_zone().toAlignedRect())
 
     # ------------------------------------------------------------------ letra
     def _toggle_lyrics(self):
@@ -762,31 +898,170 @@ class DockWindow(QWidget):
     def waves_enabled(self) -> bool:
         return self._waves_enabled
 
+    # ------------------------------------------------ ondas con audio real
+    WAVE_LIFE_S = 0.60        # cuánto vive el eco de un contorno
+    WAVE_POINTS = 29          # puntos del contorno a lo largo de la píldora
+    WAVE_SPACING_S = 0.075    # cada cuánto se guarda un contorno nuevo
+
+    def set_audio_levels(self, levels):
+        """Conecta (o desconecta con None) el servicio de niveles de audio."""
+        if self._audio_levels is levels:
+            return
+        if self._audio_levels is not None:
+            with contextlib.suppress(TypeError, RuntimeError):
+                self._audio_levels.levelsChanged.disconnect(self._on_audio_levels)
+            self._audio_levels.release(self)
+        self._audio_levels = levels
+        if levels is not None:
+            levels.levelsChanged.connect(self._on_audio_levels)
+        self._sync_ripples()
+
+    def set_audio_visualizer_enabled(self, enabled: bool):
+        self._audio_enabled = bool(enabled)
+        self._sync_ripples()
+
+    def _audio_wanted(self) -> bool:
+        return self._audio_levels is not None and self._audio_enabled and self._ripples_wanted()
+
+    def _audio_waves_live(self) -> bool:
+        """Hay audio real reciente: se dibujan las ondas del espectro. Si no
+        (la captura falló, silencio...), vale la animación decorativa de siempre."""
+        return (self._audio_levels is not None and self._audio_enabled
+                and (time.monotonic() - self._live_at) < 0.45 and bool(self._live_bands))
+
+    def _on_audio_levels(self, bands):
+        if not bands:
+            return
+        now = time.monotonic()
+        self._live_bands = list(bands)
+        self._live_at = now
+        if not self._contours or now - self._contours[-1][0] >= self.WAVE_SPACING_S:
+            self._contours.append((now, list(bands)))
+
+    def _wave_path(self, pill: QRectF, bands, travel: float, amp: float) -> QPainterPath:
+        """Contorno del espectro a lo largo del lado exterior de la píldora.
+        Graves en el centro, agudos hacia los extremos; `travel` aleja el
+        contorno de la píldora y `amp` es cuánto sobresale con el nivel máximo."""
+        from audio_levels import resample_bands
+        n = self.WAVE_POINTS
+        mid = n // 2
+        half = resample_bands(bands, mid + 1)            # centro = graves
+        raw = [half[min(mid, abs(i - mid))] for i in range(n)]
+        vals = [(raw[max(0, i - 1)] + 2 * raw[i] + raw[min(n - 1, i + 1)]) / 4.0 for i in range(n)]
+        direction = -1.0 if self._edge == "right" else 1.0   # siempre hacia afuera de la tarjeta
+        edge_x = pill.left() if self._edge == "right" else pill.right()
+        y0, y1 = pill.top() + 9.0, pill.bottom() - 9.0
+        step = (y1 - y0) / (n - 1)
+        pts = []
+        for i, v in enumerate(vals):
+            taper = 0.35 + 0.65 * math.sin(math.pi * i / (n - 1))    # extremos anclados a la píldora
+            pts.append((edge_x + direction * (1.2 + (travel + amp * v) * taper), y0 + i * step))
+        path = QPainterPath()
+        path.moveTo(*pts[0])
+        for (x0, y_a), (x1, y_b) in zip(pts, pts[1:], strict=False):
+            cx, cy = (x0 + x1) / 2.0, (y_a + y_b) / 2.0
+            path.quadTo(x0, y_a, cx, cy)
+        path.lineTo(*pts[-1])
+        return path
+
+    def _paint_audio_waves(self, painter: QPainter):
+        """Ondas que salen de la píldora hacia fuera siguiendo el sonido real:
+        derecha→izquierda con el panel a la derecha, izquierda→derecha a la izquierda."""
+        now = time.monotonic()
+        pill = self._pill_rect()
+        travel_max = max(3.0, MARGIN_X - 6.0)
+        amp = 12.0
+        items = [(now - t, b) for t, b in self._contours if now - t < self.WAVE_LIFE_S]
+        items.append((0.0, self._live_bands))                       # el contorno vivo, sin retraso
+        painter.save()
+        painter.setClipRect(self._handle_zone())
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        for age, bands in sorted(items, key=lambda it: -it[0]):     # del más viejo al más nuevo
+            k = min(1.0, age / self.WAVE_LIFE_S)
+            fade = (1.0 - k) ** 1.25
+            if fade < 0.04:
+                continue
+            path = self._wave_path(pill, bands, travel_max * k, amp * (1.0 - 0.45 * k))
+            c = _lerp_color(self._accent_a, self._accent_b, k).lighter(125)
+            if fade > 0.3:
+                glow = QColor(c)
+                glow.setAlpha(int(60 * fade))
+                painter.setPen(QPen(glow, 5.5 - 2.0 * k))
+                painter.drawPath(path)
+            c.setAlpha(int(255 * fade))
+            pen = QPen(c, 2.4 - 1.4 * k)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            painter.setPen(pen)
+            painter.drawPath(path)
+        painter.restore()
+
     def _ripples_wanted(self) -> bool:
         return (self._waves_enabled and self._style == "card" and self._is_playing
                 and self.isVisible() and not theme_module.REDUCED_MOTION)
 
     def _sync_ripples(self):
         want = self._ripples_wanted()
+        if self._audio_levels is not None:      # la captura solo corre si estas ondas se ven
+            if want and self._audio_enabled:
+                self._audio_levels.acquire(self)
+            else:
+                self._audio_levels.release(self)
         if want and not self._ripple_timer.isActive():
             self._ripple_timer.start()
+            self._align_clocks()
         elif not want and self._ripple_timer.isActive():
             self._ripple_timer.stop()
             self.update(self._ripple_rect())     # borra la última onda
 
+    def _align_clocks(self):
+        """Las ondas (esta ventana) y el círculo de la pestaña (`_WaveDot`) tienen cada uno su
+        temporizador. Si sus pasos no coinciden, cada uno provoca su propio repintado de la
+        misma franja (≈ 55 por segundo); arrancándolos a la vez Qt junta ambos en uno (30)."""
+        dot = getattr(self, "handle_icon", None)
+        if dot is not None and self._ripple_timer.isActive() and dot._timer.isActive():
+            self._ripple_timer.start()
+            dot._timer.start()
+
     def _ripple_rect(self) -> QRect:
         # Recortado a la zona de la pestaña: nunca invade la tarjeta (así el repintado
         # de las ondas no obliga a repintar la tarjeta, que es lo caro).
-        rect = self._pill_rect().adjusted(-RIPPLE_M - 3, -RIPPLE_M - 3, RIPPLE_M + 3, RIPPLE_M + 3).toAlignedRect()
+        rect = self._pill_rect().adjusted(-MARGIN_X - 3, -RIPPLE_M - 3, MARGIN_X + 3, RIPPLE_M + 3).toAlignedRect()
         return rect.intersected(self._handle_zone().toAlignedRect())
 
     def _ripple_tick(self):
         self.update(self._ripple_rect())     # solo la franja de la pestaña, no toda la tarjeta
 
+    RIPPLE_FRAMES = 72      # 30 por segundo en una vuelta de 2,4 s
+
     def _paint_ripples(self, painter: QPainter):
-        """Ondas que salen de la píldora hacia fuera, por reloj real (no por tick)."""
-        pill = self._pill_rect()
+        """Ondas que salen de la píldora hacia fuera, por reloj real (no por tick). Cada uno de
+        los 72 fotogramas de la vuelta se dibuja UNA vez (las ondas son trazos anchos con
+        resplandor, lo más caro de esta ventana) y después solo se copia la imagen."""
         phase = ((time.monotonic() - self._ripple_t0) / self.RIPPLE_PERIOD_S) % 1.0
+        index = int(phase * self.RIPPLE_FRAMES) % self.RIPPLE_FRAMES
+        rect = self._ripple_rect()
+        dpr = self.devicePixelRatioF()
+        key = (rect.x(), rect.y(), rect.width(), rect.height(), round(dpr, 3),
+               self._accent_a.rgba(), self._accent_b.rgba(), self.RIPPLE_COUNT)
+        if key != self._ripple_key:
+            self._ripple_frames.clear()
+            self._ripple_key = key
+        pix = self._ripple_frames.get(index)
+        if pix is None:
+            pix = QPixmap(max(1, int(rect.width() * dpr)), max(1, int(rect.height() * dpr)))
+            pix.setDevicePixelRatio(dpr)
+            pix.fill(Qt.GlobalColor.transparent)
+            p = QPainter(pix)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing)
+            p.translate(-rect.x(), -rect.y())
+            self._paint_ripples_at(p, index / self.RIPPLE_FRAMES)
+            p.end()
+            self._ripple_frames[index] = pix
+        painter.drawPixmap(rect.topLeft(), pix)
+
+    def _paint_ripples_at(self, painter: QPainter, phase: float):
+        pill = self._pill_rect()
         painter.save()
         painter.setClipRect(self._handle_zone())        # solo hacia fuera de la tarjeta
         painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -813,6 +1088,9 @@ class DockWindow(QWidget):
     def showEvent(self, event):
         super().showEvent(event)
         self._sync_ripples()
+        if not getattr(self, "_a11y_synced", False):
+            self._a11y_synced = True
+            sync_accessible_names(self)
 
     def hideEvent(self, event):
         self._ripple_timer.stop()
@@ -854,6 +1132,67 @@ class DockWindow(QWidget):
             self._toggle()
             event.accept()
 
+    # ------------------------------------------------------- textos pintados
+    def status_text(self) -> str:
+        """Lo que dice la cabecera de la tarjeta: «Sonando · Spotify», «En pausa
+        · YouTube» o «En espera» si no hay nada."""
+        st = self._last_state
+        if st is None or not st.has_media:
+            return "En espera"
+        word = "Sonando" if self._is_playing else "En pausa"
+        name = (st.player_name or "").strip()
+        return f"{word} · {name}" if name else word
+
+    def time_texts(self) -> tuple[str, str]:
+        """(transcurrido, duración), vacíos si la fuente no informa la duración."""
+        st = self._last_state
+        if st is None or not st.duration_known:
+            return "", ""
+        return st.position or "0:00", st.duration or ""
+
+    def _paint_status(self, painter: QPainter):
+        r = self._chip_rect
+        if r.isEmpty():
+            return
+        st = self._last_state
+        active = st is not None and st.has_media
+        if self._is_playing:
+            dot = _lerp_color(self._accent_a, self._accent_b, 0.3).lighter(120)
+        else:
+            dot = Palette.c(Palette.TEXT_DIM if active else Palette.TEXT_FAINT)
+        fm = QFontMetrics(self._small_font)
+        text = fm.elidedText(self.status_text(), Qt.TextElideMode.ElideRight, int(r.width() - 26))
+        pill_w = min(r.width(), fm.horizontalAdvance(text) + 28)
+        pill = QRectF(r.left(), r.top(), pill_w, r.height())
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(255, 255, 255, 16))
+        painter.drawRoundedRect(pill, r.height() / 2, r.height() / 2)
+        if self._is_playing:
+            halo = QColor(dot)
+            halo.setAlpha(70)
+            painter.setBrush(halo)
+            painter.drawEllipse(QRectF(pill.left() + 6, pill.center().y() - 5, 10, 10))
+        painter.setBrush(dot)
+        painter.drawEllipse(QRectF(pill.left() + 8, pill.center().y() - 3, 6, 6))
+        painter.setFont(self._small_font)
+        painter.setPen(Palette.c(Palette.TEXT if active else Palette.TEXT_DIM))
+        painter.drawText(pill.adjusted(20, 0, -8, 0), int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft), text)
+
+    def _paint_times(self, painter: QPainter):
+        left, right = self._time_rects
+        if left.isEmpty():
+            return
+        elapsed, total = self.time_texts()
+        if not total:
+            return
+        painter.setFont(self._small_font)
+        painter.setPen(Palette.c(Palette.TEXT_DIM))
+        compact = self._style == "compact"
+        painter.drawText(left, int(Qt.AlignmentFlag.AlignVCenter | (
+            Qt.AlignmentFlag.AlignRight if compact else Qt.AlignmentFlag.AlignLeft)), elapsed)
+        painter.drawText(right, int(Qt.AlignmentFlag.AlignVCenter | (
+            Qt.AlignmentFlag.AlignLeft if compact else Qt.AlignmentFlag.AlignRight)), total)
+
     # -------------------------------------------------------------- pintura
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -863,7 +1202,11 @@ class DockWindow(QWidget):
         handle = self._handle_zone()
 
         if self._ripple_timer.isActive():
-            self._paint_ripples(painter)      # debajo de la tarjeta y de la píldora
+            # debajo de la tarjeta y de la píldora
+            if self._audio_waves_live():
+                self._paint_audio_waves(painter)
+            else:
+                self._paint_ripples(painter)
 
         # --- Tarjeta de contenido (la parte que se desliza) ---
         # Las ondas repintan solo la franja de la pestaña (30 veces/s): si la zona sucia
@@ -882,6 +1225,21 @@ class DockWindow(QWidget):
             scrim.setColorAt(0.0, QColor(8, 8, 14, self._scrim_lo))
             scrim.setColorAt(1.0, QColor(8, 8, 14, max(210, min(245, self._scrim_lo + 30))))
             painter.fillPath(card_path, scrim)
+            # Sin carátula de fondo: un resplandor del color de acento detrás de la
+            # carátula (la escena 3D), para que la tarjeta no quede plana.
+            art = self.cover if self._style == "card" else self.cover_small
+            if self._card_bg is None and art.isVisibleTo(self):
+                g = QRectF(art.geometry())
+                glow = QRadialGradient(g.center(), max(g.width(), g.height()) * 0.95)
+                glow.setColorAt(0.0, QColor(self._accent_a.red(), self._accent_a.green(), self._accent_a.blue(), 46))
+                glow.setColorAt(0.6, QColor(self._accent_b.red(), self._accent_b.green(), self._accent_b.blue(), 14))
+                glow.setColorAt(1.0, QColor(self._accent_b.red(), self._accent_b.green(), self._accent_b.blue(), 0))
+                painter.fillPath(card_path, glow)
+            # Brillo fino en el borde superior: da volumen sin otra sombra.
+            sheen = QLinearGradient(content.topLeft(), QPointF(content.left(), content.top() + 40))
+            sheen.setColorAt(0.0, QColor(255, 255, 255, 14))
+            sheen.setColorAt(1.0, QColor(255, 255, 255, 0))
+            painter.fillPath(card_path, sheen)
             painter.restore()
 
             grad = QLinearGradient(content.topLeft(), content.bottomRight())
@@ -902,6 +1260,10 @@ class DockWindow(QWidget):
                 painter.setBrush(QColor(8, 8, 14, 125))
                 painter.drawRoundedRect(QRectF(self.lyrics_panel.geometry()), 14, 14)
 
+            if self._style == "card":
+                self._paint_status(painter)
+            self._paint_times(painter)
+
         # --- Pestaña (siempre visible, en el borde real) ---
         handle_path = QPainterPath()
         handle_path.addRoundedRect(self._pill_rect(), 14, 14)
@@ -920,6 +1282,13 @@ class DockWindow(QWidget):
         painter.setPen(pen2)
         painter.drawPath(handle_path)
 
+        # Rayitas entre los grupos de botones de la pestaña (tarjeta).
+        if self._bar_separators:
+            pill = self._pill_rect()
+            painter.setPen(QPen(QColor(255, 255, 255, 34), 1.0))
+            for y in self._bar_separators:
+                painter.drawLine(QPointF(pill.center().x() - 7, y), QPointF(pill.center().x() + 7, y))
+
         painter.end()
 
 
@@ -935,10 +1304,15 @@ class _WaveDot(QWidget):
     visible, y se apaga con "reducir movimiento" (entonces "sonando" se
     distingue de "pausa" por el brillo, sin movimiento)."""
 
-    PERIOD_S = 1.7      # una onda tarda esto en ir del círculo al borde
+    PERIOD_S = 1.65     # una onda tarda esto en ir del círculo al borde
     RINGS = 4
     CORE_R = 5.6
     BREATH_S = 1.1      # latido del núcleo y del halo
+    # 1,65 s (ondas) y 1,1 s (latido) son múltiplos de 0,55 s: la animación COMPLETA se repite cada
+    # 3,3 s. Por eso cada fotograma se dibuja una vez y se reutiliza (ver _frame), en vez de
+    # redibujar halo, cuatro anillos y núcleo 30 veces por segundo.
+    LOOP_S = 3.3
+    FRAMES = 99         # 30 por segundo
 
     def __init__(self, parent: DockWindow):
         super().__init__(parent)
@@ -951,14 +1325,25 @@ class _WaveDot(QWidget):
         self._timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._timer.setInterval(33)   # ~30 fps: suficiente para ondas suaves
         self._timer.timeout.connect(self.update)
+        self._frames: dict[int, QPixmap] = {}
+        self._frames_key = None
 
     def is_animating(self) -> bool:
         return self._timer.isActive()
+
+    def restart_clock(self):
+        """Reinicia el temporizador (si corre) para que sus pasos coincidan con los de las
+        ondas de la pestaña: así Qt junta ambos repintados en uno solo."""
+        if self._timer.isActive():
+            self._timer.start()
 
     def _sync_timer(self):
         should_run = self._playing and self.isVisible() and not theme_module.REDUCED_MOTION
         if should_run and not self._timer.isActive():
             self._timer.start()
+            align = getattr(self.parent(), "_align_clocks", None)
+            if align is not None:
+                align()
         elif not should_run and self._timer.isActive():
             self._timer.stop()
 
@@ -988,14 +1373,45 @@ class _WaveDot(QWidget):
 
     def paintEvent(self, event):
         painter = QPainter(self)
+        if self._timer.isActive():
+            frame = self._frame()
+            if frame is not None:
+                painter.drawPixmap(0, 0, frame)
+                painter.end()
+                return
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        self._paint_frame(painter, None)
+        painter.end()
+
+    def _frame(self):
+        """Fotograma de la animación ya dibujado (se calcula una vez por cada uno de los 99
+        de cada vuelta de 3,3 s). Se descarta si cambian el tamaño, los colores o la densidad."""
+        dpr = self.devicePixelRatioF()
+        key = (self.width(), self.height(), round(dpr, 3), self._accent_a.rgba(), self._accent_b.rgba(), self._playing)
+        if key != self._frames_key:
+            self._frames.clear()
+            self._frames_key = key
+        index = int(((time.monotonic() - self._t0) % self.LOOP_S) / self.LOOP_S * self.FRAMES) % self.FRAMES
+        pix = self._frames.get(index)
+        if pix is None:
+            pix = QPixmap(max(1, int(self.width() * dpr)), max(1, int(self.height() * dpr)))
+            pix.setDevicePixelRatio(dpr)
+            pix.fill(Qt.GlobalColor.transparent)
+            p = QPainter(pix)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing)
+            self._paint_frame(p, index * self.LOOP_S / self.FRAMES)
+            p.end()
+            self._frames[index] = pix
+        return pix
+
+    def _paint_frame(self, painter, now):
+        """`now` = segundos dentro de la animación, o None si está parada (estático)."""
         cx, cy = self.width() / 2.0, self.height() / 2.0
         max_r = min(self.width(), self.height()) / 2.0 - 1.0
         core = self.CORE_R
         painter.setBrush(Qt.BrushStyle.NoBrush)
 
-        if self._timer.isActive():
-            now = time.monotonic() - self._t0
+        if now is not None:
             phase = (now / self.PERIOD_S) % 1.0
             breath = 0.5 + 0.5 * math.sin(2 * math.pi * (now / self.BREATH_S))   # 0..1
             core = core * (1.0 + 0.2 * breath)            # el núcleo late
@@ -1029,7 +1445,6 @@ class _WaveDot(QWidget):
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(grad)
         painter.drawEllipse(QRectF(cx - core, cy - core, 2 * core, 2 * core))
-        painter.end()
 
 
 class _DockArrowButton(QAbstractButton):

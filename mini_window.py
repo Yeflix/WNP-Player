@@ -18,7 +18,7 @@ from PyQt6.QtWidgets import QWidget
 
 from theme import Palette, FONT_BODY
 import theme as theme_module
-from widgets import IconButton, SeekBar, MarqueeLabel, VinylCover, blur_image, _lerp_color
+from widgets import IconButton, SeekBar, MarqueeLabel, VinylCover, blur_image, _lerp_color, OptimisticHold, sync_accessible_names
 from backend import PlayerState
 
 # --- Geometría base (a escala 1.0) del modo expandido (barra) -------------
@@ -93,6 +93,7 @@ class MiniWindow(QWidget):
 
         self.cover_loader.coverReady.connect(self._on_cover_ready)
         self.cover_loader.colorsReady.connect(self._on_colors_ready)
+        self._play_hold = OptimisticHold(1.2)   # orden de play/pausa aún sin confirmar
         self.backend.stateChanged.connect(self.apply_state)
         self.apply_state(PlayerState())
 
@@ -102,7 +103,7 @@ class MiniWindow(QWidget):
         self.vinyl.clicked.connect(self._toggle_collapsed)
 
         self.title_label = MarqueeLabel("Sin reproducción", self, align=Qt.AlignmentFlag.AlignLeft)
-        self.artist_label = MarqueeLabel("WNP Player", self, align=Qt.AlignmentFlag.AlignLeft)
+        self.artist_label = MarqueeLabel("YefriPlayer", self, align=Qt.AlignmentFlag.AlignLeft)
         self.seek_bar = SeekBar(self, height=10, bar_height=3)
 
         # Estos mismos botones se reutilizan (se reposicionan y redimensionan)
@@ -224,6 +225,15 @@ class MiniWindow(QWidget):
     def _apply_play_enabled(self, state):
         self.play_btn.setEnabled(self._play_enabled(state))
 
+    def _resync_play(self):
+        """Vence el plazo de la orden optimista (ver main_window._resync_controls)."""
+        st = self._last_state
+        if st is None:
+            return
+        playing = self._play_hold.resolve(st.state == "PLAYING")
+        self.play_btn.set_icon("pause" if playing else "play")
+        self.vinyl.set_spinning(playing)
+
     def _on_play_clicked(self):
         # Reacción optimista, basada en lo que el botón YA muestra (no en
         # self._last_state, que solo se refresca cada ~150ms y haría que
@@ -233,9 +243,11 @@ class MiniWindow(QWidget):
             self.backend.toggle_play_pause()
             return
         will_play = self.play_btn.icon_name != "pause"
+        self._play_hold.set(will_play)
         self.play_btn.set_icon("pause" if will_play else "play")
         self.vinyl.set_spinning(will_play)
-        self.backend.toggle_play_pause()
+        self.backend.set_playing(will_play)
+        QTimer.singleShot(1300, self._resync_play)
 
     # --------------------------------------------------------- modo barra/disco
     _MODE_FADE_MS = 110
@@ -519,7 +531,7 @@ class MiniWindow(QWidget):
             self.artist_label.setText(state.artist or "Artista desconocido")
         else:
             self.title_label.setText("Sin reproducción")
-            self.artist_label.setText("WNP Player")
+            self.artist_label.setText("YefriPlayer")
 
         self.seek_bar.set_percent(state.position_percent)
         # Ver comentario equivalente en main_window.py: sin duración real
@@ -528,12 +540,13 @@ class MiniWindow(QWidget):
         self.seek_bar.set_seekable(state.controls_available and state.duration_known)
         self.seek_bar.set_duration_seconds(state.duration_seconds)
 
-        self.play_btn.set_icon("pause" if state.state == "PLAYING" else "play")
+        playing = self._play_hold.resolve(state.state == "PLAYING")
+        self.play_btn.set_icon("pause" if playing else "play")
         self._apply_play_enabled(state)
         self.prev_btn.setEnabled(state.controls_available)
         self.next_btn.setEnabled(state.controls_available)
 
-        self.vinyl.set_spinning(state.state == "PLAYING")
+        self.vinyl.set_spinning(playing)
 
         if state.cover_url != self._current_cover_url:
             self._current_cover_url = state.cover_url
@@ -660,6 +673,9 @@ class MiniWindow(QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
+        if not getattr(self, "_a11y_synced", False):
+            self._a11y_synced = True
+            sync_accessible_names(self)
         if self._collapsed and not self._hover_poll_timer.isActive():
             self._hover_poll_timer.start()
 
@@ -675,6 +691,10 @@ class MiniWindow(QWidget):
 
     def keyPressEvent(self, event):
         key = event.key()
+        if event.isAutoRepeat() and key in (Qt.Key.Key_Space, Qt.Key.Key_Right, Qt.Key.Key_Left,
+                                            Qt.Key.Key_MediaNext, Qt.Key.Key_MediaPrevious):
+            event.accept()      # mantener pulsada la tecla cuenta una sola vez
+            return
         if key == Qt.Key.Key_Space:
             if self.play_btn.isEnabled():
                 self._on_play_clicked()

@@ -27,7 +27,7 @@ def run(ms):
     loop = QEventLoop(); QTimer.singleShot(ms, loop.quit); loop.exec()
 
 import dock_window, player_launcher
-from dock_window import DockWindow, RIPPLE_M, HANDLE_SIZE
+from dock_window import DockWindow, RIPPLE_M, HANDLE_SIZE, MARGIN_X
 from backend import WNPBackend, PlayerState
 from cover_loader import CoverArtLoader
 from likes import LikeInfo
@@ -61,7 +61,7 @@ for edge in ("right", "left"):
         ok = (round(g_left) == geo.left() + 3 and round(g_right) == geo.left() + 31)
     check(f"borde {edge}: la píldora queda donde estaba (a 3 px del borde, 28 px de ancho)", ok,
           f"{g_left:.0f}..{g_right:.0f} geo={geo.left()}..{geo.right()}")
-    check(f"borde {edge}: la zona de la pestaña incluye el margen de las ondas", d._handle_zone().width() == 34 + RIPPLE_M)
+    check(f"borde {edge}: la zona de la pestaña incluye el margen de las ondas", d._handle_zone().width() == 34 + MARGIN_X)
     d.hide()
 
 # ------------------------------------------------------------------ 2

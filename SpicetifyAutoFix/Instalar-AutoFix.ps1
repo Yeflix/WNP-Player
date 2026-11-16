@@ -9,8 +9,9 @@
     de espera). NO usa privilegios de administrador a proposito: Spicetify se
     niega a funcionar como administrador y Spotify quedaria en negro.
   - Con el lanzador (metodo 1) la tarea deja un vigilante residente que reacciona
-    cuando Spotify se ABRE o se CIERRA (ver Lanzador.cs), en vez de revisar cada
-    N minutos. La repeticion cada 30 min de la tarea solo sirve de supervisor:
+    cuando Spotify se ABRE, se CIERRA, se REINICIA al actualizarse o pasa de la
+    bandeja a una ventana (ver Lanzador.cs), en vez de revisar cada N minutos;
+    ademas hace una comprobacion de seguridad por hora sin reiniciar Spotify. La repeticion cada 30 min de la tarea solo sirve de supervisor:
     si el vigilante murio lo vuelve a levantar; si esta vivo no hace nada.
     Con los metodos 2 y 3 (sin lanzador) se mantiene el sondeo cada N minutos.
   - Corre SIN VENTANA. Orden de preferencia (usa el primero que funcione):
@@ -177,6 +178,15 @@ if ($Desinstalar) {
 
 # -------------------------------------------------------------------- instalar
 if ($CadaMinutos -lt 5 -or $CadaMinutos -gt 120) { Write-Host 'CadaMinutos debe estar entre 5 y 120.' -ForegroundColor Red; exit 1 }
+
+# Con "Ejecutar como administrador" la tarea queda a nombre de la cuenta que
+# eleva (que puede no ser la tuya) y Spicetify se niega a correr como admin.
+try {
+    $yo = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
+    if ($yo.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        Write-Host ('Aviso: se esta ejecutando como administrador ({0}). La tarea quedara para ESA cuenta y sin privilegios elevados. Si no es tu usuario normal, cierra esto y usa doble clic en Instalar.bat sin "Ejecutar como administrador".' -f $env:USERNAME) -ForegroundColor Yellow
+    }
+} catch { }
 
 $origen = Join-Path $PSScriptRoot 'Spicetify-AutoFix.ps1'
 if (-not (Test-Path -LiteralPath $origen)) { Write-Host "No encuentro Spicetify-AutoFix.ps1 junto a este instalador ($origen)." -ForegroundColor Red; exit 1 }

@@ -9,6 +9,8 @@ import sys
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QFont, QImage
+import contextlib
+from diag import soft
 
 # ---------------------------------------------------------------- accesibilidad
 # Dos escalas de letra distintas, a pedido:
@@ -161,7 +163,7 @@ def set_player_theme(name: str) -> str:
     """Aplica un aspecto a Palette. Llamar antes de importar app_controller
     (accent.py lee Palette al importarse). Un nombre desconocido deja el
     aspecto predeterminado. Devuelve el aspecto realmente aplicado."""
-    global PLAYER_THEME
+    global PLAYER_THEME  # noqa: PLW0603 — estado de módulo a propósito (lo leen otros módulos o las pruebas)
     name = name if name in PLAYER_THEMES else "default"
     for key, value in PLAYER_THEMES[name].items():
         setattr(Palette, key, value)
@@ -183,7 +185,7 @@ def apply_accessibility(font_scale: float = 1.0, high_contrast: bool = False,
     aclara un poco los paneles, para que el texto secundario (artista,
     tiempos, subtítulos de diálogos) se lea mejor sin cambiar la paleta de
     acento del tema — este sí aplica a TODA la app, reproductor incluido."""
-    global FONT_SCALE, REDUCED_MOTION
+    global FONT_SCALE, REDUCED_MOTION  # noqa: PLW0603 — estado de módulo a propósito (lo leen otros módulos o las pruebas)
     FONT_SCALE = max(0.8, min(1.6, font_scale))
     # Alto contraste: se respeta el ajuste propio de la app Y el de Windows
     # (Configuración > Accesibilidad > Contraste). Movimiento reducido: por
@@ -195,14 +197,12 @@ def apply_accessibility(font_scale: float = 1.0, high_contrast: bool = False,
         Palette.TEXT_DIM = Palette.TEXT_DIM_HC
         Palette.TEXT_FAINT = Palette.TEXT_FAINT_HC
         Palette.BG_PANEL = Palette.BG_PANEL_HC
-    try:
+    with soft("theme.apply_accessibility"):
         from PyQt6.QtWidgets import QApplication
         app = QApplication.instance()
         if app is not None:
             apply_dark_palette(app)
             app.setStyleSheet(build_global_qss())
-    except Exception:
-        pass
 
 
 # ------------------------------------------------------------ movimiento reducido
@@ -390,6 +390,69 @@ FONT_MONO = "Consolas"
 FONT_FALLBACK = "Segoe UI"
 
 # Hoja de estilo global (QSS) para widgets estándar de Qt (sliders, tooltips, menús...)
+# ---------------------------------------------------------------- palomita
+_CHECK_ICON_VERSION = 1
+
+
+def _check_icon_rule() -> str:
+    """Regla QSS `image: url(...)` con la palomita de las casillas marcadas.
+
+    Qt no deja dibujar la palomita con colores en la hoja de estilo: necesita
+    un archivo de imagen. Se genera la primera vez (PNG de 12 px + versión
+    @2x para pantallas de alta densidad) en la carpeta de datos de la app, por
+    eso funciona igual con el .exe que ejecutando el código. El color (blanco
+    u oscuro) se elige según el contraste con el color de acento del aspecto
+    activo. Si no se puede crear (sin QApplication, carpeta sin permisos...),
+    devuelve "" y la casilla se ve como antes, solo con el fondo de acento."""
+    try:
+        from PyQt6.QtGui import QGuiApplication, QPainter, QPen, QPainterPath
+        if QGuiApplication.instance() is None:
+            return ""
+        from config import _config_dir
+        import os
+
+        def lin(c: int) -> float:
+            v = c / 255
+            return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+
+        r, g, b = Palette.ACCENT_A
+        lum = 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+        dark = 1.05 / (lum + 0.05) < 3.0      # el blanco no contrasta lo bastante
+        tone = "oscura" if dark else "blanca"
+        color = QColor(18, 18, 30) if dark else QColor(255, 255, 255)
+
+        folder = _config_dir()
+        folder.mkdir(parents=True, exist_ok=True)
+        base = folder / f"casilla-{tone}-v{_CHECK_ICON_VERSION}"
+        for suffix, scale in ((".png", 1), ("@2x.png", 2)):
+            path = base.parent / (base.name + suffix)
+            if path.exists() and path.stat().st_size > 0:
+                continue
+            side = 12 * scale
+            img = QImage(side, side, QImage.Format.Format_ARGB32_Premultiplied)
+            img.fill(Qt.GlobalColor.transparent)
+            p = QPainter(img)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing)
+            pen = QPen(color, 1.9 * scale)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            p.setPen(pen)
+            tick = QPainterPath()
+            tick.moveTo(2.7 * scale, 6.3 * scale)
+            tick.lineTo(5.0 * scale, 8.7 * scale)
+            tick.lineTo(9.4 * scale, 3.7 * scale)
+            p.drawPath(tick)
+            p.end()
+            tmp = path.with_suffix(".tmp.png")
+            if not img.save(str(tmp)):
+                return ""
+            os.replace(tmp, path)
+        return f'image: url("{(base.parent / (base.name + ".png")).as_posix()}");'
+    except Exception:
+        return ""
+
+
+
 def _global_qss_source() -> str:
     return f"""
 QToolTip {{
@@ -462,6 +525,11 @@ QLineEdit {{
 }}
 QLineEdit:focus {{
     border: 1px solid rgb{Palette.ACCENT_A};
+}}
+QLineEdit:disabled {{
+    background-color: rgba(255,255,255,6);
+    color: rgb{Palette.TEXT_FAINT};
+    border: 1px solid rgba(255,255,255,16);
 }}
 
 /* Listas desplegables. Antes NO tenían estilo: el texto y, sobre todo, la
@@ -553,6 +621,18 @@ QCheckBox::indicator {{
 QCheckBox::indicator:checked {{
     background-color: rgb{Palette.ACCENT_A};
     border: 1px solid rgb{Palette.ACCENT_A};
+    {_check_icon_rule()}
+}}
+QCheckBox:disabled {{
+    color: rgb{Palette.TEXT_FAINT};
+}}
+QCheckBox::indicator:disabled {{
+    background-color: rgba(255,255,255,5);
+    border: 1px solid rgba(255,255,255,22);
+}}
+QCheckBox::indicator:checked:disabled {{
+    background-color: rgba(255,255,255,40);
+    border: 1px solid rgba(255,255,255,40);
 }}
 
 QPushButton#hotkeyCapture {{
@@ -603,6 +683,67 @@ QPushButton#dialogButtonAccent {{
 }}
 QPushButton#dialogButtonAccent:hover {{
     background-color: rgb{Palette.ACCENT_BUTTON_HOVER};
+}}
+/* Estado deshabilitado (ej. «Atrás» en el primer paso del asistente). Antes NO había
+   regla: un botón deshabilitado se veía igual que uno activo y hasta reaccionaba al
+   pasar el ratón. Va DESPUÉS de :hover para que gane. */
+/* Botones de sección de Configuración: uno por sección; el marcado es donde estás. */
+QPushButton#settingsChip {{
+    background-color: rgba(255,255,255,10);
+    color: rgb{Palette.TEXT_DIM};
+    border: 1px solid rgba(255,255,255,14);
+    border-radius: 11px;
+    padding: 3px 4px;
+    font-size: 10.5px;
+    font-weight: 600;
+}}
+QPushButton#settingsChip:hover {{
+    background-color: rgba(255,255,255,20);
+    color: rgb{Palette.TEXT};
+}}
+QPushButton#settingsChip:checked {{
+    background-color: rgba(255,255,255,26);
+    color: rgb{Palette.TEXT};
+    border: 1px solid rgb{Palette.ACCENT_A};
+}}
+QPushButton#settingsChip:focus {{
+    border: 1px solid rgb{Palette.ACCENT_A};
+}}
+/* Barra lateral de Configuración: una entrada por sección; la marcada es donde estás. */
+QPushButton#settingsNavItem {{
+    background-color: transparent;
+    color: rgb{Palette.TEXT_DIM};
+    border: none;
+    border-left: 3px solid transparent;
+    border-radius: 8px;
+    padding: 7px 10px;
+    text-align: left;
+    font-size: 11.5px;
+    font-weight: 600;
+}}
+QPushButton#settingsNavItem:hover {{
+    background-color: rgba(255,255,255,14);
+    color: rgb{Palette.TEXT};
+}}
+QPushButton#settingsNavItem:checked {{
+    background-color: rgba(255,255,255,22);
+    color: rgb{Palette.TEXT};
+    border-left: 3px solid rgb{Palette.ACCENT_A};
+}}
+QPushButton#settingsNavItem[compact="true"] {{
+    padding: 4px 10px;
+    font-size: 11px;
+}}
+QPushButton#settingsNavItem:focus {{
+    border: 1px solid rgb{Palette.ACCENT_A};
+}}
+QPushButton#dialogButton:disabled {{
+    background-color: rgba(255,255,255,7);
+    color: rgb{Palette.TEXT_FAINT};
+}}
+QPushButton#dialogButtonAccent:disabled {{
+    background-color: rgba(255,255,255,10);
+    color: rgb{Palette.TEXT_FAINT};
 }}
 /* Anillo de foco visible para teclado en botones estándar de Qt. */
 QPushButton:focus {{
@@ -678,21 +819,23 @@ def apply_dark_palette(app) -> None:
     sin importar el tema del sistema."""
     from PyQt6.QtGui import QPalette
     from PyQt6.QtCore import Qt as _Qt
-    try:  # Qt >= 6.8: además le decimos al estilo nativo que use su variante oscura
+    with contextlib.suppress(Exception):  # Qt >= 6.8: además le decimos al estilo nativo que use su variante oscura
         app.styleHints().setColorScheme(_Qt.ColorScheme.Dark)
-    except Exception:
-        pass
     C = QColor
     pal = QPalette()
     R = QPalette.ColorRole
     G = QPalette.ColorGroup
+    # Enlaces (Configuración > Cuentas para «Me gusta»...): antes usaban el segundo color de
+    # acento (azul, 4,0:1 contra el panel: por debajo del 4,5:1 mínimo para texto pequeño).
+    # Ahora, el acento principal aclarado lo justo para llegar a 4,5:1, igual que el artista.
+    link_color = ensure_contrast(Palette.ACCENT_A, Palette.BG_PANEL, 4.5)
     roles = {
         R.Window: Palette.BG_BASE, R.WindowText: Palette.TEXT,
         R.Base: Palette.BG_PANEL, R.AlternateBase: Palette.BG_BASE,
         R.Text: Palette.TEXT, R.Button: Palette.BG_PANEL, R.ButtonText: Palette.TEXT,
         R.ToolTipBase: Palette.BG_PANEL, R.ToolTipText: Palette.TEXT,
         R.Highlight: Palette.ACCENT_BUTTON, R.HighlightedText: (255, 255, 255),
-        R.Link: Palette.ACCENT_B, R.BrightText: (255, 255, 255),
+        R.Link: link_color, R.LinkVisited: link_color, R.BrightText: (255, 255, 255),
         R.PlaceholderText: Palette.TEXT_FAINT,
     }
     for role, rgb in roles.items():

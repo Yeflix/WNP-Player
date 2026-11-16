@@ -11,7 +11,7 @@ QUÉ HACE
     - y, con la prueba de salto, si mandar la posición al final termina el anuncio.
 
 CÓMO USARLO
-  1. Cierra WNP Player (usa el mismo puerto; los dos a la vez no caben).
+  1. Cierra YefriPlayer (usa el mismo puerto; los dos a la vez no caben).
   2. Abre YouTube en el navegador con la extensión WebNowPlaying.
   3. Ejecuta:      python tools/diagnostico_anuncios.py
   4. Reproduce un video hasta que salga un anuncio y usa estas teclas (+ Enter):
@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import contextlib
 import json
 import os
 import socket
@@ -76,7 +77,7 @@ def snapshot(wnp, now=time.time) -> dict:
     }
 
 
-def changed_fields(prev: "dict | None", cur: dict) -> list[str]:
+def changed_fields(prev: dict | None, cur: dict) -> list[str]:
     if prev is None:
         return list(FIELDS_WATCHED)
     return [k for k in FIELDS_WATCHED if prev.get(k) != cur.get(k)]
@@ -86,12 +87,12 @@ def changed_fields(prev: "dict | None", cur: dict) -> list[str]:
 class Recorder:
     """Guarda cada muestra y cada marca en memoria y en un .jsonl."""
 
-    def __init__(self, path: "str | None" = None, echo=print):
+    def __init__(self, path: str | None = None, echo=print):
         self.rows: list[dict] = []
         self.path = path
         self.echo = echo
         self._fh = open(path, "w", encoding="utf-8") if path else None
-        self._last: "dict | None" = None
+        self._last: dict | None = None
         self._last_print = 0.0
         self.in_ad = False          # entre las marcas 'a' y 'f'
 
@@ -163,7 +164,7 @@ def run_seek_probe(wnp, recorder: Recorder, sleep=time.sleep, now=time.time,
     try:
         wnp.media_info.controls.try_set_position_seconds(target)
         result["sent"] = target
-    except Exception as exc:                       # noqa: BLE001
+    except Exception as exc:
         result["verdict"] = V_SIN_EFECTO
         result["error"] = repr(exc)
         recorder.log(result); recorder.echo(f"    >>> PRUEBA: error al mandar la orden: {exc!r}")
@@ -254,7 +255,7 @@ def main(argv=None) -> int:
         except Exception:
             port = 1234
     if not _port_is_free(port):
-        print(f"El puerto {port} está en uso. Cierra WNP Player (o cualquier otro programa que lo use) y vuelve a intentar.")
+        print(f"El puerto {port} está en uso. Cierra YefriPlayer (o cualquier otro programa que lo use) y vuelve a intentar.")
         return 2
 
     out = args.out or f"diagnostico_anuncios_{datetime.datetime.now():%Y%m%d_%H%M%S}.jsonl"
@@ -302,10 +303,8 @@ def main(argv=None) -> int:
         summary = summarize(rec.rows)
         rec.log({"type": "summary", **summary})
         rec.close()
-        try:
+        with contextlib.suppress(Exception):
             WNPRedux.stop()
-        except Exception:
-            pass
         print("\n================ RESUMEN ================")
         print(json.dumps(summary, indent=2, ensure_ascii=False))
         print(f"\nArchivo completo: {os.path.abspath(out)}")

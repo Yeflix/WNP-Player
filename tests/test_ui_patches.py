@@ -179,7 +179,7 @@ sb.setFocus(Qt.FocusReason.TabFocusReason)
 QApplication.sendEvent(sb, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Right, Qt.KeyboardModifier.NoModifier))
 check("flecha derecha = +5 s (2.5 % de 200 s)", got and abs(got[-1] - 2.5) < 1e-6, str(got))
 QApplication.sendEvent(sb, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_End, Qt.KeyboardModifier.NoModifier))
-check("Fin = 100 %", got[-1] == 100.0)
+check("Fin = final de la canción, dejando 1 s (no salta a la siguiente)", abs(got[-1] - 99.5) < 1e-6, str(got[-1]))
 check("hover text de la barra", sb._hover_text(50.0) == "1:40", sb._hover_text(50.0))
 vols = []
 vb = widgets.VolumeBar(height=16, bar_height=6); vb.resize(150, 16); vb.show(); vb.set_percent(50)

@@ -185,6 +185,8 @@ import asyncio
 import sys
 import threading
 import time
+import contextlib
+from diag import soft
 
 _patched = False
 
@@ -214,12 +216,10 @@ def _use_selector_event_loop_on_windows():
     servidor corra en otro hilo."""
     if sys.platform != "win32":
         return
-    try:
+    with soft("pywnp_patch._use_selector_event_loop_on_windows"):  # si esto falla, seguimos con la política por defecto (con el ruido, pero sin romper nada)
         policy_cls = getattr(asyncio, "WindowsSelectorEventLoopPolicy", None)
         if policy_cls is not None:
             asyncio.set_event_loop_policy(policy_cls())
-    except Exception:
-        pass  # si esto falla, seguimos con la política por defecto (con el ruido, pero sin romper nada)
 
 
 # AUMID (Application User Model ID) -> nombre legible. Cubre las apps
@@ -323,10 +323,8 @@ def _patch_httpserver_update_recipients(WNPRedux, HttpServer):
     original_update_recipients = HttpServer.update_recipients
 
     def _fixed_update_recipients() -> None:
-        try:
+        with soft("pywnp_patch._patch_httpserver_update_recipients._fixed_update_recipients"):
             WNPRedux.update_media_info()
-        except Exception:
-            pass
         original_update_recipients()
 
     HttpServer.update_recipients = _fixed_update_recipients
@@ -336,7 +334,7 @@ def _apply_impl():
     """Aplica el parche. Es seguro llamarlo varias veces (no hace nada la
     segunda vez) y no falla si no estamos en Windows o si pywnp cambió su
     estructura interna en una versión más nueva."""
-    global _patched
+    global _patched  # noqa: PLW0603 — estado de módulo a propósito (lo leen otros módulos o las pruebas)
     if _patched:
         return
 
@@ -453,7 +451,7 @@ def _apply_impl():
 
             WNPRedux.update_media_info()
             HttpServer.update_recipients()
-        except Exception as ex:  # noqa: BLE001 — ver Bug #11 arriba
+        except Exception as ex:
             WNPRedux.log("Error", "WNPReduxNative - Failed to read timeline properties (parche)")
             WNPRedux.log("Debug", f"WNPReduxNative - Error Trace: {ex}")
 
@@ -500,7 +498,7 @@ def _apply_impl():
             media_info.shuffle_active = bool(info.is_shuffle_active or False)
             WNPRedux.update_media_info()
             HttpServer.update_recipients()
-        except Exception as ex:  # noqa: BLE001 — ver Bug #11 arriba
+        except Exception as ex:
             WNPRedux.log("Error", "WNPReduxNative - Failed to read playback info (parche)")
             WNPRedux.log("Debug", f"WNPReduxNative - Error Trace: {ex}")
 
@@ -521,7 +519,7 @@ def _apply_impl():
             try:
                 native.pool.submit(native.sessions_changed_native, manager, None).result(timeout=5)
                 return True
-            except Exception as ex:  # noqa: BLE001
+            except Exception as ex:
                 WNPRedux.log("Debug", f"WNPNativeWindows - No se pudieron renovar las sesiones: {ex}")
                 return False
 
@@ -558,10 +556,8 @@ def _apply_impl():
                 ("remove_playback_info_changed", win_session.playback_info_changed_token),
                 ("remove_timeline_properties_changed", win_session.timeline_properties_changed_token),
             ):
-                try:
+                with contextlib.suppress(Exception):  # sesión muerta: ya no hay nada que dar de baja
                     getattr(win_session.session, name)(token)
-                except Exception:  # noqa: BLE001 — sesión muerta: ya no hay nada que dar de baja
-                    pass
         native.win_sessions.clear()
 
     @staticmethod
@@ -586,7 +582,7 @@ def _apply_impl():
 
             try:
                 _submit(native.win_sessions[app_id].session)
-            except Exception as ex:  # noqa: BLE001
+            except Exception as ex:
                 if not _is_rpc_unavailable(ex):
                     raise
                 # Bug #12b: la sesión guardada ya no responde (el reproductor se
@@ -598,7 +594,7 @@ def _apply_impl():
                     WNPRedux.log("Debug", f"WNPNativeWindows - {app_id} ya no tiene sesión (¿se cerró?); orden descartada (parche)")
                     return
                 _submit(fresh.session)
-        except Exception as ex:  # noqa: BLE001
+        except Exception as ex:
             WNPRedux.log("Error", "WNPNativeWindows - Failed to execute event (parche)")
             WNPRedux.log("Debug", f"WNPNativeWindows - Error Trace: {ex}")
 
@@ -618,12 +614,124 @@ def apply():
     """Envoltorio seguro de `_apply_impl`: si pywnp cambió algo interno y un
     parche falla, se registra el aviso y la app SIGUE arrancando (los parches
     ya aplicados quedan; antes la excepción impedía iniciar el servidor)."""
-    global _patched
+    global _patched  # noqa: PLW0603 — estado de módulo a propósito (lo leen otros módulos o las pruebas)
     if _patched:
         return
     try:
         _apply_impl()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         import sys
         print(f"[pywnp_patch] parche parcial: {type(exc).__name__}: {exc}", file=sys.stderr)
         _patched = True   # evita volver a envolver las mismas funciones dos veces
+
+# --------------------------------------------------------------------------
+# Sesiones "fantasma" de Windows (reproductor pegado en la última canción)
+# --------------------------------------------------------------------------
+# pywnp solo limpia las sesiones nativas cuando Windows avisa con el evento
+# SessionsChanged. Si el aviso no llega (o llega mientras se cierra la sesión y
+# otro evento de estado vuelve a crear la entrada de esa app: `get_media_info`
+# CREA la entrada si no existe), la sesión muerta queda en
+# `media_info_dictionary` con su último título para siempre. Si estaba en
+# PLAYING, además gana a cualquier otro reproductor al elegir cuál mostrar. Con
+# Spotify de escritorio (cerrarlo, cerrar sesión, cambiar de dispositivo...) se
+# veía como "el reproductor se queda pegado en la misma reproducción" aunque se
+# reiniciaran los demás reproductores.
+#
+# Solución: cada pocos segundos se compara lo que pywnp tiene contra las
+# sesiones que Windows reporta de verdad y se quitan las que ya no existen.
+RECONCILE_EVERY_S = 3.0
+_reconcile_lock = threading.Lock()
+_last_reconcile_at = [0.0]
+
+
+def reconcile_native_sessions(impl=None, live_ids=None) -> list:
+    """Quita de pywnp las entradas nativas cuya sesión de Windows ya no existe.
+    Devuelve los identificadores quitados. Nunca lanza excepciones.
+
+    `impl` y `live_ids` existen para poder probarlo sin Windows."""
+    try:
+        if impl is None:
+            import pywnp.pywnp as impl
+        WNPRedux = getattr(impl, "WNPRedux", None)
+        native = getattr(impl, "WNPReduxNative", None)
+        if WNPRedux is None or native is None:
+            return []
+        prefix = getattr(native, "id_prefix", "")
+        if not prefix:
+            return []
+        entries = [mi for mi in list(WNPRedux.media_info_dictionary)
+                   if str(getattr(mi, "_id", "")).startswith(prefix)]
+        if not entries:
+            return []
+        if live_ids is None:
+            manager = getattr(native, "manager", None)
+            if manager is None:
+                return []
+            sessions = manager.get_sessions()
+            live = set() if sessions is None else {s.source_app_user_model_id for s in sessions}
+        else:
+            live = set(live_ids)
+        removed = []
+        for mi in entries:
+            sid = mi._id[len(prefix):]
+            if sid in live:
+                continue
+            with contextlib.suppress(ValueError):
+                WNPRedux.media_info_dictionary.remove(mi)
+            dead = native.win_sessions.pop(sid, None)
+            if dead is not None:
+                for name, token in (
+                    ("remove_media_properties_changed", dead.media_properties_changed_token),
+                    ("remove_playback_info_changed", dead.playback_info_changed_token),
+                    ("remove_timeline_properties_changed", dead.timeline_properties_changed_token),
+                ):
+                    with contextlib.suppress(Exception):  # sesión muerta
+                        getattr(dead.session, name)(token)
+            removed.append(sid)
+        if removed:
+            WNPRedux.update_media_info()
+            HttpServer = getattr(impl, "HttpServer", None)
+            if HttpServer is not None:
+                with soft("pywnp_patch.reconcile_native_sessions"):
+                    HttpServer.update_recipients()
+            with soft("pywnp_patch.reconcile_native_sessions"):
+                WNPRedux.log("Warning", "Sesión(es) de Windows ya cerradas, limpiadas: "
+                             + ", ".join(removed) + " (parche)")
+        return removed
+    except Exception:
+        return []
+
+
+def schedule_reconcile(min_interval: float = RECONCILE_EVERY_S) -> bool:
+    """Pide la reconciliación SIN bloquear a quien llama (la consulta a Windows
+    va en el hilo de WinRT de pywnp). Es barata de llamar en cada sondeo: sale
+    enseguida si no toca todavía o si no hay sesiones nativas. Devuelve True si
+    se lanzó."""
+    now = time.monotonic()
+    if now - _last_reconcile_at[0] < min_interval:
+        return False
+    impl = sys.modules.get("pywnp.pywnp")
+    native = getattr(impl, "WNPReduxNative", None)
+    WNPRedux = getattr(impl, "WNPRedux", None)
+    if native is None or WNPRedux is None or getattr(native, "pool", None) is None:
+        return False
+    prefix = getattr(native, "id_prefix", "")
+    if not prefix or not any(str(getattr(mi, "_id", "")).startswith(prefix)
+                             for mi in list(WNPRedux.media_info_dictionary)):
+        return False                       # no hay sesiones nativas que revisar
+    if not _reconcile_lock.acquire(blocking=False):
+        return False
+    _last_reconcile_at[0] = now
+
+    def _job():
+        try:
+            reconcile_native_sessions(impl)
+        finally:
+            _reconcile_lock.release()
+
+    try:
+        native.pool.submit(_job)
+    except Exception:
+        _reconcile_lock.release()
+        return False
+    return True

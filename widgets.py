@@ -25,6 +25,8 @@ from PyQt6.QtGui import QBrush, QFontMetrics
 from theme import Palette, FONT_BODY
 import theme as theme_module
 import icons
+import welcome_fx
+import contextlib
 
 
 LIKE_RGB = (255, 94, 125)   # rosa del corazón de "me gusta" (fijo, no depende del acento)
@@ -441,6 +443,49 @@ class IconButton(QAbstractButton):
         return transform.map(icons.get_icon_path(name))
 
 
+class OptimisticHold:
+    """Valor que el usuario acaba de pedir y que el estado real todavía no
+    confirma.
+
+    El estado llega por sondeo (~150 ms) y los reproductores tardan en aplicar
+    una orden (más en el navegador). Sin esto, el sondeo siguiente trae el valor
+    VIEJO y la interfaz "rebota": el botón de play vuelve a su ícono anterior y
+    luego cambia otra vez, la barra de volumen salta atrás y regresa, etc.
+    Mientras la orden esté pendiente se muestra lo pedido; se suelta en cuanto
+    el reproductor lo confirma o vence el plazo (si el reproductor ignoró la
+    orden, la interfaz vuelve sola a la realidad)."""
+
+    def __init__(self, timeout_s: float = 1.2):
+        self._timeout = float(timeout_s)
+        self._until = 0.0
+        self._value = None
+
+    def set(self, value):
+        self._value = value
+        self._until = time.monotonic() + self._timeout
+
+    def clear(self):
+        self._until = 0.0
+        self._value = None
+
+    @property
+    def active(self) -> bool:
+        return self._until > 0.0 and time.monotonic() < self._until
+
+    def resolve(self, real, equal=None):
+        """Valor a mostrar: el pedido mientras `real` no lo confirme."""
+        if self._until == 0.0:
+            return real
+        if time.monotonic() >= self._until:
+            self.clear()
+            return real
+        same = equal(real, self._value) if equal else real == self._value
+        if same:
+            self.clear()
+            return real
+        return self._value
+
+
 class SeekBar(QWidget):
     """Barra de progreso con soporte de arrastre para buscar (seek).
     Las actualizaciones que llegan del backend (`set_percent`) se animan
@@ -474,6 +519,7 @@ class SeekBar(QWidget):
         self._hover_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
         self._duration_seconds = 0
         self._kbd_focus = False
+        self._hold = OptimisticHold(timeout_s=1.5)
         self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
         self.setAccessibleName("Progreso de reproducción")
 
@@ -491,6 +537,27 @@ class SeekBar(QWidget):
         mientras se pasa el mouse por encima (tooltip) y para el paso del
         teclado (5 s por flecha)."""
         self._duration_seconds = max(0, int(seconds or 0))
+
+    def _hold_tolerance(self) -> float:
+        """Diferencia (en puntos de %) que se considera "ya lo aplicó": 2 s."""
+        d = self._duration_seconds
+        return max(1.0, 2.0 / d * 100.0) if d > 0 else 2.0
+
+    def _commit_value(self, percent: float) -> float:
+        """Valor que realmente se manda al reproductor. Soltar la barra en el
+        extremo derecho no debe saltar a la canción siguiente: se deja 1 s."""
+        d = self._duration_seconds
+        if d > 1:
+            percent = min(percent, (d - 1) / d * 100.0)
+        return max(0.0, percent)
+
+    def set_user_percent(self, percent: float):
+        """El usuario fijó este valor (silenciar, rueda, teclado...): se
+        muestra ya y se protege del sondeo que aún trae el valor anterior."""
+        self._anim.stop()
+        self._percent = max(0.0, min(100.0, float(percent)))
+        self._hold.set(self._percent)
+        self.update()
 
     def _hover_text(self, percent: float) -> str:
         if self._duration_seconds <= 0:
@@ -537,7 +604,9 @@ class SeekBar(QWidget):
         self._percent = percent
         self.seekPreview.emit(percent)
         self.update()
-        self.seekRequested.emit(percent)
+        value = self._commit_value(percent)
+        self._hold.set(value)
+        self.seekRequested.emit(value)
 
     def keyPressEvent(self, event):
         if not self._seekable:
@@ -582,8 +651,17 @@ class SeekBar(QWidget):
 
     def set_percent(self, percent: float):
         if self._dragging:
-            return
+            from PyQt6.QtWidgets import QApplication
+            if QApplication.mouseButtons() == Qt.MouseButton.NoButton:
+                # El "soltar" se perdió (ventana que robó el foco, notificación,
+                # Alt+Tab en pleno arrastre): sin esto la barra quedaba
+                # congelada y ya no seguía la reproducción.
+                self._dragging = False
+            else:
+                return
         percent = max(0.0, min(100.0, percent))
+        tol = self._hold_tolerance()
+        percent = self._hold.resolve(percent, lambda real, held: abs(real - held) <= tol)
         delta = abs(percent - self._percent)
         if delta < 0.05:
             return
@@ -621,6 +699,10 @@ class SeekBar(QWidget):
     def mousePressEvent(self, event):
         if not self._seekable:
             return
+        if event.button() != Qt.MouseButton.LeftButton:
+            # Clic derecho/central: no es una orden (antes también movía la barra).
+            event.ignore()
+            return
         self._anim.stop()
         self._dragging = True
         self._update_from_x(event.position().x())
@@ -637,7 +719,9 @@ class SeekBar(QWidget):
     def mouseReleaseEvent(self, event):
         if self._dragging:
             self._dragging = False
-            self.seekRequested.emit(self._percent)
+            value = self._commit_value(self._percent)
+            self._hold.set(value)
+            self.seekRequested.emit(value)
 
     def _update_from_x(self, x):
         w = max(1, self.width())
@@ -717,6 +801,12 @@ class VolumeBar(SeekBar):
     def set_interactive(self, enabled: bool):
         self.set_seekable(enabled)
 
+    def _hold_tolerance(self) -> float:
+        return 2.0
+
+    def _commit_value(self, percent: float) -> float:
+        return max(0.0, min(100.0, percent))
+
     def _hover_text(self, percent: float) -> str:
         return f"{round(percent)}%"
 
@@ -725,6 +815,7 @@ class VolumeBar(SeekBar):
 
     def _apply_key_value(self, percent: float):
         self._percent = percent
+        self._hold.set(percent)
         self.update()
         self._emit_timer.stop()
         self._pending_emit = False
@@ -746,6 +837,9 @@ class VolumeBar(SeekBar):
             self.volumeChanged.emit(round(self._percent))
 
     def mousePressEvent(self, event):
+        if event.button() != Qt.MouseButton.LeftButton:
+            event.ignore()
+            return
         super().mousePressEvent(event)
         if self._seekable:
             # El primer toque se manda directo, sin esperar el throttle —
@@ -821,11 +915,24 @@ class ElidedLabel(QLabel):
         extra = max(0, sh.width() - fm.horizontalAdvance(self.text()))
         return QSize(fm.horizontalAdvance("…") + extra, super().minimumSizeHint().height())
 
+    def set_variants(self, variants: list[str]):
+        """Versiones del texto de la más larga a la más corta («REPRODUCIENDO», «SONANDO»):
+        se muestra la más larga que quepa y solo si ni la más corta cabe se recorta con «…».
+        Mejor una palabra corta completa que una larga cortada («REPRODUCI…»)."""
+        self._variants = [v for v in variants if v]
+        self._full_text = self._variants[0] if self._variants else ""
+        self._apply_elide()
+        self.updateGeometry()
+
     def _apply_elide(self):
         metrics = QFontMetrics(self.font())
         # contentsRect() ya descuenta el relleno/borde del stylesheet (padding: 3px 2px...).
         width = self.contentsRect().width()
-        elided = metrics.elidedText(self._full_text, Qt.TextElideMode.ElideRight, max(0, width))
+        text = self._full_text
+        variants = getattr(self, "_variants", None)
+        if variants:
+            text = next((v for v in variants if metrics.horizontalAdvance(v) <= width), variants[-1])
+        elided = metrics.elidedText(text, Qt.TextElideMode.ElideRight, max(0, width))
         super().setText(elided)
         self.setToolTip(self._full_text if elided != self._full_text else "")
 
@@ -852,10 +959,20 @@ class MarqueeLabel(QWidget):
                            # _step se ajusta solo más abajo según _TICK_MS).
     _GAP_PX = 4             # margen para no recortar la última letra
 
+    # Avisa al contenedor de que el alto que necesita cambió (texto repartido en más o menos
+    # líneas): una ventana de alto automático debe volver a ajustarse.
+    heightHintChanged = pyqtSignal()
+
     def __init__(self, text="", parent=None, font: QFont | None = None,
                  color=None, align=Qt.AlignmentFlag.AlignHCenter,
-                 pixels_per_sec: float = 42.0, pause_ms: int = 900):
+                 pixels_per_sec: float = 42.0, pause_ms: int = 900, max_static_lines: int = 1):
         super().__init__(parent)
+        # Con «movimiento reducido» el texto largo no se desplaza. Con max_static_lines > 1 se
+        # reparte en hasta ese número de líneas (la última se recorta con «…») en vez de
+        # cortarse en una sola y dejar el título ilegible.
+        self._max_lines = max(1, int(max_static_lines))
+        self._wrapped: list[str] = []
+        self._wrap_elided = False
         self._font = font if font is not None else QFont(FONT_BODY, 12)
         self._color = color if color is not None else QColor(255, 255, 255)
         self._align = align
@@ -874,6 +991,9 @@ class MarqueeLabel(QWidget):
         self._pause_until = 0.0
         self._last_tick = None
 
+        self._pix: QPixmap | None = None          # texto ya dibujado (ver _text_pixmap)
+        self._pix_key = None
+
         self._timer = QTimer(self)
         self._timer.setInterval(self._TICK_MS)
         self._timer.timeout.connect(self._tick)
@@ -890,7 +1010,33 @@ class MarqueeLabel(QWidget):
     def sizeHint(self) -> QSize:
         metrics = QFontMetrics(self._font)
         width = max(40, metrics.horizontalAdvance(self._full_text) or 60)
-        return QSize(width, metrics.height() + 2)
+        return QSize(width, metrics.height() * max(1, len(self._wrapped)) + 2)
+
+    def _wrap(self, width: int) -> tuple[list[str], bool]:
+        """Reparte el texto en hasta `_max_lines` líneas de `width` px (por palabras)."""
+        metrics = QFontMetrics(self._font)
+        lines: list[str] = []
+        current = ""
+        for word in self._full_text.split():
+            trial = f"{current} {word}".strip()
+            if metrics.horizontalAdvance(trial) <= width or not current:
+                current = trial
+            else:
+                lines.append(current)
+                current = word
+        if current:
+            lines.append(current)
+        elided = False
+        if len(lines) > self._max_lines:
+            rest = " ".join(lines[self._max_lines - 1:])
+            lines = lines[:self._max_lines - 1] + [metrics.elidedText(rest, Qt.TextElideMode.ElideRight, width)]
+            elided = True
+        out = []
+        for line in lines:                                  # una palabra más ancha que la línea
+            fitted = metrics.elidedText(line, Qt.TextElideMode.ElideRight, width)
+            elided = elided or fitted != line
+            out.append(fitted)
+        return out, elided
 
     def setFont(self, font: QFont):
         super().setFont(font)
@@ -900,6 +1046,7 @@ class MarqueeLabel(QWidget):
 
     def set_color(self, color: QColor):
         self._color = color
+        self._pix = None
         self.update()
 
     def setText(self, text: str):
@@ -928,18 +1075,52 @@ class MarqueeLabel(QWidget):
             self._timer.start()
         super().showEvent(event)
 
+    def _text_pixmap(self, rect_h: int) -> QPixmap:
+        """El texto completo ya dibujado, en un pixmap que se reutiliza en cada fotograma.
+        Antes cada paso de la marquesina (20 veces por segundo) volvía a calcular y dibujar
+        el texto con suavizado; ahora solo se desplaza una imagen. Se rehace únicamente si
+        cambia el texto, la fuente, el color, el alto o la densidad de píxeles de la pantalla."""
+        dpr = self.devicePixelRatioF()
+        key = (self._full_text, self._font.key(), self._color.rgba(), rect_h, round(dpr, 3), self._GAP_PX)
+        if self._pix_key != key or self._pix is None:
+            width = self._text_width + self._GAP_PX
+            pix = QPixmap(max(1, int(width * dpr)), max(1, int(rect_h * dpr)))
+            pix.setDevicePixelRatio(dpr)
+            pix.fill(Qt.GlobalColor.transparent)
+            p = QPainter(pix)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing)
+            p.setFont(self._font)
+            p.setPen(self._color)
+            p.drawText(QRectF(0, 0, width, rect_h),
+                       Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, self._full_text)
+            p.end()
+            self._pix, self._pix_key = pix, key
+        return self._pix
+
     def _recompute(self):
+        self._pix = None
         metrics = QFontMetrics(self._font)
         self._text_width = metrics.horizontalAdvance(self._full_text)
         truncated = self.width() > 0 and self._text_width > self.width()
         # Con movimiento reducido el texto largo NO se desplaza: se recorta
         # con "…" (ver paintEvent) y el texto completo queda en el tooltip.
         self._needs_scroll = truncated and not theme_module.REDUCED_MOTION
+        before = len(self._wrapped)
+        self._wrapped, self._wrap_elided = [], False
+        if truncated and theme_module.REDUCED_MOTION and self._max_lines > 1:
+            lines, elided = self._wrap(self.width())
+            if len(lines) > 1:
+                self._wrapped, self._wrap_elided = lines, elided
+        if len(self._wrapped) != before:
+            self.setMinimumHeight(QFontMetrics(self._font).height() * len(self._wrapped) + 2 if self._wrapped else 0)
+            self.updateGeometry()
+            QTimer.singleShot(0, self.heightHintChanged.emit)
         self._offset = 0.0
         self._direction = 1
         self._last_tick = None
         self._pause_until = time.monotonic() + self._pause_s if self._needs_scroll else 0.0
-        self.setToolTip(self._full_text if truncated else "")
+        # Si se ve entero en varias líneas no hace falta el tooltip con el texto completo.
+        self.setToolTip(self._full_text if truncated and (not self._wrapped or self._wrap_elided) else "")
 
         if self._needs_scroll and self.isVisible():
             if not self._timer.isActive():
@@ -975,12 +1156,13 @@ class MarqueeLabel(QWidget):
         painter.setPen(self._color)
         rect = self.rect()
         if self._needs_scroll:
-            draw_w = max(rect.width(), self._text_width) + self._GAP_PX
-            draw_rect = QRectF(-self._offset, 0, draw_w, rect.height())
-            painter.drawText(
-                draw_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                self._full_text,
-            )
+            # Solo se desplaza la imagen del texto (entera de píxeles: sin borrosidad).
+            painter.drawPixmap(QPointF(-round(self._offset), 0), self._text_pixmap(rect.height()))
+        elif self._wrapped:
+            height = QFontMetrics(self._font).height()
+            for i, line in enumerate(self._wrapped):
+                painter.drawText(QRectF(0, i * height, rect.width(), height),
+                                 self._align | Qt.AlignmentFlag.AlignVCenter, line)
         else:
             text = self._full_text
             if self._text_width > rect.width() > 0:
@@ -991,9 +1173,11 @@ class MarqueeLabel(QWidget):
 
 
 class CoverArt(QWidget):
-    """Carátula redondeada con halo de color y marcador de posición cuando no
-    hay imagen. Al cambiar de una carátula a otra, se desvanece suavemente
-    en vez de reemplazarse de golpe."""
+    """Carátula redondeada con halo de color. Sin imagen (no hay reproductor o
+    lo que suena no trae carátula) muestra la escena 3D de sonido de la
+    bienvenida (`welcome_fx.IdleScene`) en vez de una nota musical. Al cambiar
+    de una carátula a otra, se desvanece suavemente en vez de reemplazarse de
+    golpe."""
 
     def __init__(self, size=190, radius_ratio=0.16, parent=None):
         super().__init__(parent)
@@ -1002,6 +1186,9 @@ class CoverArt(QWidget):
         self.setFixedSize(size, size)
         self._image: QImage | None = None
         self._prev_image: QImage | None = None
+        self._glow_alpha = -1                    # transparencia entera del borde ya pintada
+        self._content_pix: QPixmap | None = None  # carátula recortada ya dibujada (ver _content_cache)
+        self._content_key = None
         # Versiones YA escaladas al tamaño del widget, cacheadas: escalar
         # con suavizado es relativamente caro, y sin este cache se estaba
         # recalculando en CADA repintado — antes eso solo pasaba durante
@@ -1023,6 +1210,37 @@ class CoverArt(QWidget):
         self._fade_anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
         self._fade_anim.finished.connect(self._on_fade_finished)
 
+        self._idle = welcome_fx.IdleScene(self)
+        self._idle.set_active(True)
+
+    # ----------------------------------------------------- escena sin carátula
+    def set_scene_paused(self, paused: bool):
+        """Para la escena aunque el widget siga «visible» para Qt (p. ej. el panel
+        lateral recogido: la tarjeta queda fuera de la pantalla)."""
+        self._idle.set_paused(paused)
+
+    def scene_running(self) -> bool:
+        return self._idle.is_running()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._idle.sync()
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        self._idle.sync()
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.WindowStateChange:
+            self._idle.sync()
+
+    def _scene_rect(self) -> QRectF:
+        # Un poco más grande que la carátula: la escena «encajada» entera quedaba
+        # chica; así solo se recortan los bordes de las ondas del suelo.
+        grow = self.width() * 0.07
+        return QRectF(-grow, -grow * 0.6, self.width() + 2 * grow, self.height() + 2 * grow)
+
     def set_accent(self, rgb_a: tuple, rgb_b: tuple):
         """Color de acento del halo detrás de la carátula. Lo anima quien
         llama (MainWindow), acá solo guardamos el valor ya interpolado de
@@ -1037,6 +1255,12 @@ class CoverArt(QWidget):
         if abs(value - self._glow_intensity) < 0.002:
             return
         self._glow_intensity = value
+        # El borde solo cambia cuando cambia su transparencia ENTERA (40..130): repintar
+        # por variaciones menores era trabajo sin ningún cambio visible.
+        alpha = round(40 + 90 * max(0.0, min(1.0, value)))
+        if alpha == self._glow_alpha:
+            return
+        self._glow_alpha = alpha
         self.update()
 
     def _get_fade_progress(self) -> float:
@@ -1081,6 +1305,7 @@ class CoverArt(QWidget):
             self._image_scaled = self._rescale(new_image) if new_image is not None else None
             self._fade_progress = 1.0
             self.update()
+        self._idle.set_active(self._image is None)
 
     def _rescale(self, image: QImage) -> QImage:
         return image.scaled(
@@ -1104,16 +1329,9 @@ class CoverArt(QWidget):
         y = (scaled.height() - self.height()) / 2
         painter.drawImage(QPointF(-x, -y), scaled)
 
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-        rect = QRectF(0, 0, self.width(), self.height())
-        radius = self.width() * self._radius_ratio
-
-        clip_path = QPainterPath()
-        clip_path.addRoundedRect(rect, radius, radius)
-
+    def _paint_content(self, painter, rect, clip_path):
+        """Carátula (con fundido entre dos imágenes) o marcador de posición, recortada
+        a las esquinas redondeadas."""
         painter.save()
         painter.setClipPath(clip_path)
 
@@ -1127,23 +1345,58 @@ class CoverArt(QWidget):
             else:
                 self._draw_scaled(painter, self._image_scaled)
         else:
+            # Fondo de la escena 3D (la escena se pinta encima en cada fotograma,
+            # fuera de esta caché: ver paintEvent).
             base_grad = QLinearGradient(rect.topLeft(), rect.bottomRight())
             base_grad.setColorAt(0.0, Palette.c(Palette.BG_PANEL, 255))
             base_grad.setColorAt(1.0, QColor(22, 22, 32, 255))
             painter.fillPath(clip_path, base_grad)
 
-            note_path = icons.get_icon_path("note")
-            icon_size = self.width() * 0.30
-            transform = QTransform()
-            transform.translate(
-                rect.center().x() - icon_size / 2, rect.center().y() - icon_size / 2
-            )
-            transform.scale(icon_size / 24, icon_size / 24)
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(*Palette.TEXT_FAINT, 200))
-            painter.drawPath(transform.map(note_path))
-
         painter.restore()
+
+    def _content_cache(self, rect, clip_path):
+        """La carátula ya recortada, en una imagen que se reutiliza. Antes cada paso del
+        borde que «respira» (12 por segundo mientras suena) recortaba con antialiasing y
+        volvía a dibujar la carátula entera; ahora solo se repinta el borde. Devuelve None
+        durante el fundido entre dos carátulas (se dibuja normal)."""
+        if self._prev_image is not None and self._fade_progress < 0.999:
+            return None
+        dpr = self.devicePixelRatioF()
+        scaled = self._image_scaled
+        key = (self.width(), self.height(), round(dpr, 3), scaled.cacheKey() if scaled is not None else 0,
+               self._radius_ratio, tuple(Palette.BG_PANEL), tuple(Palette.TEXT_FAINT))
+        if self._content_key != key or self._content_pix is None:
+            pm = QPixmap(max(1, int(self.width() * dpr)), max(1, int(self.height() * dpr)))
+            pm.setDevicePixelRatio(dpr)
+            pm.fill(Qt.GlobalColor.transparent)
+            p = QPainter(pm)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing)
+            p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+            self._paint_content(p, rect, clip_path)
+            p.end()
+            self._content_pix, self._content_key = pm, key
+        return self._content_pix
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        rect = QRectF(0, 0, self.width(), self.height())
+        radius = self.width() * self._radius_ratio
+
+        clip_path = QPainterPath()
+        clip_path.addRoundedRect(rect, radius, radius)
+
+        cache = self._content_cache(rect, clip_path)
+        if cache is not None:
+            painter.drawPixmap(0, 0, cache)
+        else:
+            self._paint_content(painter, rect, clip_path)
+        if self._image is None:
+            painter.save()
+            painter.setClipPath(clip_path)
+            self._idle.paint(painter, self._scene_rect(), self._accent_a, self._accent_b)
+            painter.restore()
 
         # Borde de acento que "respira" con la reproducción (set_glow_intensity).
         # Antes era un halo exterior de 10 px, pero el widget no tiene margen:
@@ -1185,6 +1438,8 @@ class VinylCover(QWidget):
 
         self._label_pixmap: QPixmap | None = None
         self._prev_label_pixmap: QPixmap | None = None
+        self._disc_cache: QPixmap | None = None       # disco ya dibujado (ver _draw_cached_disc)
+        self._disc_key = None
         self._fade_progress = 1.0  # 1.0 = solo se ve _label_pixmap (sin transición en curso)
         self._angle = 0.0
         self._spinning = False
@@ -1206,6 +1461,10 @@ class VinylCover(QWidget):
         self._fade_anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
         self._fade_anim.finished.connect(self._on_fade_finished)
 
+        # Sin carátula, la etiqueta del vinilo muestra la escena 3D (sin girar).
+        self._idle = welcome_fx.IdleScene(self)
+        self._idle.set_active(True)
+
     def _get_fade_progress(self) -> float:
         return self._fade_progress
 
@@ -1223,6 +1482,14 @@ class VinylCover(QWidget):
     def _on_fade_finished(self):
         self._prev_label_pixmap = None
         self.update()
+
+    def scene_running(self) -> bool:
+        return self._idle.is_running()
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.WindowStateChange:
+            self._idle.sync()
 
     # ------------------------------------------------------------ ajustes
     def set_diameter(self, diameter: int):
@@ -1270,6 +1537,7 @@ class VinylCover(QWidget):
             self._label_pixmap = new_pixmap
             self._fade_progress = 1.0
             self.update()
+        self._idle.set_active(self._label_pixmap is None)
 
     def set_spinning(self, spinning: bool):
         if spinning == self._spinning:
@@ -1286,10 +1554,12 @@ class VinylCover(QWidget):
             self._last_spin = time.monotonic()
             self._timer.start()
         super().showEvent(event)
+        self._idle.sync()
 
     def hideEvent(self, event):
         self._timer.stop()
         super().hideEvent(event)
+        self._idle.sync()
 
     def _advance(self):
         now = time.monotonic()
@@ -1299,22 +1569,9 @@ class VinylCover(QWidget):
         self.update()
 
     # -------------------------------------------------------------- pintura
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        d = self._diameter
-        cx = self.width() / 2
-        cy = self.height() / 2
-
-        # sombra propia (el vinilo "flota" sobre la barra)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(0, 0, 0, 110))
-        painter.drawEllipse(QRectF(cx - d / 2, cy - d / 2 + 3, d, d))
-
-        painter.save()
-        painter.translate(cx, cy)
-        painter.rotate(self._angle)
-
+    def _paint_disc_content(self, painter, d):
+        """Disco + surcos + brillo + etiqueta + eje, con el origen en el centro del disco
+        y SIN girar (quien llama aplica la rotación)."""
         disc_rect = QRectF(-d / 2, -d / 2, d, d)
         disc_grad = QRadialGradient(QPointF(0, 0), d / 2)
         disc_grad.setColorAt(0.0, QColor(48, 48, 58))
@@ -1368,17 +1625,11 @@ class VinylCover(QWidget):
                     QRectF(0, 0, self._label_pixmap.width(), self._label_pixmap.height()),
                 )
         else:
+            # Fondo de la etiqueta; la escena 3D va encima, sin girar (ver paintEvent).
             base = QLinearGradient(label_rect.topLeft(), label_rect.bottomRight())
             base.setColorAt(0.0, Palette.c(Palette.BG_PANEL))
             base.setColorAt(1.0, QColor(22, 22, 32))
             painter.fillPath(clip, base)
-            note_path = icons.get_icon_path("note")
-            icon_size = label_r * 1.1
-            transform = QTransform()
-            transform.translate(-icon_size / 2, -icon_size / 2)
-            transform.scale(icon_size / 24, icon_size / 24)
-            painter.setBrush(QColor(*Palette.TEXT_FAINT, 200))
-            painter.drawPath(transform.map(note_path))
         painter.restore()
 
         # eje central
@@ -1386,7 +1637,65 @@ class VinylCover(QWidget):
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawEllipse(QPointF(0, 0), 2.6, 2.6)
 
+
+    def _draw_cached_disc(self, painter, d) -> bool:
+        """Dibuja el disco desde una imagen ya preparada y solo la gira. Antes cada
+        fotograma (25 por segundo mientras suena) redibujaba sombra, degradado, ~10
+        surcos, brillo y la etiqueta recortada y reescalada; ahora es una sola imagen
+        girada. Devuelve False durante el fundido entre dos etiquetas (se dibuja normal)."""
+        if self._prev_label_pixmap is not None and self._fade_progress < 0.999:
+            return False
+        dpr = self.devicePixelRatioF()
+        label = self._label_pixmap
+        key = (d, round(dpr, 3), label.cacheKey() if label is not None else 0,
+               tuple(Palette.BG_PANEL), tuple(Palette.TEXT_FAINT))
+        side = d + 4
+        if self._disc_key != key or self._disc_cache is None:
+            pm = QPixmap(max(1, int(side * dpr)), max(1, int(side * dpr)))
+            pm.setDevicePixelRatio(dpr)
+            pm.fill(Qt.GlobalColor.transparent)
+            p = QPainter(pm)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing)
+            p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+            p.translate(side / 2, side / 2)
+            self._paint_disc_content(p, d)
+            p.end()
+            self._disc_cache, self._disc_key = pm, key
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+        painter.drawPixmap(QPointF(-side / 2, -side / 2), self._disc_cache)
+        return True
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        d = self._diameter
+        cx = self.width() / 2
+        cy = self.height() / 2
+
+        # sombra propia (el vinilo "flota" sobre la barra)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(0, 0, 0, 110))
+        painter.drawEllipse(QRectF(cx - d / 2, cy - d / 2 + 3, d, d))
+
+        painter.save()
+        painter.translate(cx, cy)
+        painter.rotate(self._angle)
+        if not self._draw_cached_disc(painter, d):
+            self._paint_disc_content(painter, d)
         painter.restore()  # deshace translate/rotate
+
+        if self._label_pixmap is None:
+            # La escena, recortada al círculo de la etiqueta y sin girar con el disco.
+            label_r = d * 0.40
+            label = QRectF(cx - label_r, cy - label_r, label_r * 2, label_r * 2)
+            clip = QPainterPath()
+            clip.addEllipse(label)
+            painter.save()
+            painter.setClipPath(clip)
+            self._idle.paint(painter, label.adjusted(-label_r * 0.15, -label_r * 0.05,
+                                                     label_r * 0.15, label_r * 0.1),
+                             self._accent_a, self._accent_b)
+            painter.restore()
 
         # borde neón exterior (fijo, para que no "tiemble" al girar)
         ring_grad = QLinearGradient(QPointF(cx - d / 2, cy - d / 2), QPointF(cx + d / 2, cy + d / 2))
@@ -1896,6 +2205,19 @@ class LyricsPanel(QWidget):
         self._debounce = QTimer(self)
         self._debounce.setSingleShot(True)
         self._debounce.timeout.connect(self._apply_pending_track)
+        # --- Robustez ---
+        # Estado de la búsqueda de la canción actual: idle | loading | found |
+        # missing | error. Con él se decide cuándo reintentar sola.
+        self._state = "idle"
+        self._refresh_after_ready = False   # llegaron mejores metadatos con la consulta en vuelo
+        self._auto_retried_key = None       # clave que ya tuvo su reintento automático
+        self._transient_retries = 0
+        self._retry_timer = QTimer(self)
+        self._retry_timer.setSingleShot(True)
+        self._retry_timer.timeout.connect(self._auto_retry)
+        self._watchdog = QTimer(self)       # «Buscando…» nunca debe quedarse para siempre
+        self._watchdog.setSingleShot(True)
+        self._watchdog.timeout.connect(self._on_watchdog)
 
         # --- Interpolación local de la posición ---
         # `set_position()` solo se llama cuando llega un nuevo dato "real"
@@ -1973,7 +2295,13 @@ class LyricsPanel(QWidget):
         self.stack.addWidget(self.canvas)
 
     # --------------------------------------------------------------- estado
+    _WATCHDOG_MS = 25000
+
     def _show_message(self, icon_name: str, text: str, loading: bool = False, retry: bool = False):
+        if loading:
+            self._watchdog.start(self._WATCHDOG_MS)
+        else:
+            self._watchdog.stop()
         self.reload_btn.setVisible(bool(retry) and self._cur is not None)
         self.message_icon.set_icon(icon_name)
         self.message_icon.setVisible(not loading)
@@ -2003,14 +2331,19 @@ class LyricsPanel(QWidget):
 
         self._debounce.stop()
         self._pending = None
+        self._retry_timer.stop()
+        self._refresh_after_ready = False
+        self._transient_retries = 0
         if not artist or not title:
             self._cur = None
             self._key = None
+            self._state = "idle"
             self._show_message("mic", "Reproduce algo para ver la letra aquí.")
             return
 
         self._cur = (artist, title, album, duration_seconds)
         self._key = lyrics_module._cache_key(artist, title)
+        self._state = "loading"
         self._show_message("mic", "Buscando letra…", loading=True)
         self._loader.request(artist, title, album, duration_seconds)
 
@@ -2024,6 +2357,7 @@ class LyricsPanel(QWidget):
         if self._cur and self._cur[:2] == (artist, title):
             self._debounce.stop()      # volvió a la que ya está cargada
             self._pending = None
+            self.update_metadata(album, duration_seconds)
             return
         if self._cur is None and self._pending is None:
             # Primera carga (panel recién abierto o app recién iniciada): no hay una
@@ -2038,33 +2372,95 @@ class LyricsPanel(QWidget):
         if args:
             self.set_track(*args)
 
+    def update_metadata(self, album: str = "", duration_seconds: int = 0):
+        """Puesta al día de álbum y duración de la canción ACTUAL.
+
+        Los reproductores de escritorio entregan el título primero y la
+        duración/álbum después (o, al cambiar de tema, la duración del tema
+        anterior). La primera búsqueda sale con datos a medias y puede fallar
+        aunque la letra exista; antes la recarga reutilizaba esos mismos datos
+        viejos y volvía a fallar, y solo cambiando de canción y volviendo se
+        buscaba con datos buenos. Ahora el panel guarda los más recientes y,
+        si mejoran mientras no hay letra, busca de nuevo solo."""
+        if self._cur is None:
+            return
+        artist, title, old_album, old_dur = self._cur
+        new_album = album or old_album
+        new_dur = int(duration_seconds) if duration_seconds and duration_seconds > 0 else old_dur
+        if (new_album, new_dur) == (old_album, old_dur):
+            return
+        self._cur = (artist, title, new_album, new_dur)
+        if self._state == "found":
+            return                       # ya hay letra: no se toca
+        if self._state == "loading":
+            self._refresh_after_ready = True     # se repite al terminar la consulta en vuelo
+        elif self._state in ("missing", "error"):
+            self._retry_timer.stop()
+            self.reload()
+
     def reload(self):
         """Botón de recarga: vuelve a buscar la letra de la canción actual,
-        saltándose la caché (incluida una respuesta previa de 'no encontrada')."""
+        saltándose la caché (incluida una respuesta previa de 'no encontrado'),
+        con los metadatos MÁS RECIENTES."""
         if self._cur is None:
             return
         import lyrics as lyrics_module
         artist, title, album, duration_seconds = self._cur
+        self._retry_timer.stop()
+        self._refresh_after_ready = False
         self._key = lyrics_module._cache_key(artist, title)
+        self._state = "loading"
         self._show_message("mic", "Buscando letra…", loading=True)
         self._loader.request(artist, title, album, duration_seconds, force=True)
+
+    # ------------------------------------------------------- reintentos solos
+    def _schedule_retry(self, delay_s: float):
+        if self._cur is None or not self._key:
+            return
+        self._retry_timer.start(int(max(0.5, delay_s) * 1000))
+
+    def _auto_retry(self):
+        if self._state in ("missing", "error") and self._cur is not None:
+            self.reload()
+
+    def _on_watchdog(self):
+        """La consulta lleva demasiado sin responder: se muestra el botón de
+        reintentar (y se reintenta sola una vez) en vez de «Buscando…» eterno."""
+        if self._state != "loading":
+            return
+        self._state = "error"
+        self._show_message("alert", "La búsqueda de la letra está tardando demasiado.", retry=True)
+        if self._auto_retried_key != self._key:
+            self._auto_retried_key = self._key
+            self._schedule_retry(2.0)
 
     def _on_ready(self, key: str, result):
         if key != self._key:
             return
+        import lyrics as lyrics_module
         if result is None:
+            self._state = "missing"
             self._show_message("note", "No se encontró letra para esta canción.", retry=True)
+            self._after_failure(transient=False)
         elif "error" in result:
+            self._state = "error"
             self._show_message("alert", str(result.get("error") or "No se pudo buscar la letra."),
                                retry=True)
+            self._after_failure(transient=bool(result.get("transient")),
+                                wait=lyrics_module.rate_limit_remaining())
         elif result.get("instrumental"):
+            self._state = "found"
             self._show_message("mic", "Instrumental — esta canción no tiene letra.")
         else:
             self._plain_text = result.get("plain") or ""
             self._synced = result.get("synced")
             if not self._plain_text and not self._synced:
+                self._state = "missing"
                 self._show_message("note", "No se encontró letra para esta canción.", retry=True)
+                self._after_failure(transient=False)
                 return
+            self._state = "found"
+            self._refresh_after_ready = False
             self._populate_lines()
             self._show_lyrics_page()
             self._sync_interp_timer()  # ahora sí puede haber letra sincronizada para interpolar
@@ -2073,6 +2469,23 @@ class LyricsPanel(QWidget):
                 # aplicamos el resaltado de inmediato en vez de esperar al
                 # próximo tick de interpolación.
                 self._apply_position(self._last_real_position)
+
+    def _after_failure(self, transient: bool, wait: float = 0.0):
+        """Qué hacer cuando no hubo letra: si durante la búsqueda mejoraron los
+        metadatos, repetir enseguida con ellos; si no, UN reintento automático
+        pasados unos segundos (o al terminar la espera de lrclib)."""
+        if self._refresh_after_ready:
+            self._refresh_after_ready = False
+            self.reload()
+            return
+        if transient and self._transient_retries < 3:
+            self._transient_retries += 1
+            self._schedule_retry(1.5)
+        elif wait > 0:
+            self._schedule_retry(min(60.0, wait + 1.5))     # lrclib pidió esperar
+        elif self._auto_retried_key != self._key:
+            self._auto_retried_key = self._key
+            self._schedule_retry(4.0)
 
     def _populate_lines(self):
         if self._synced:
@@ -2197,11 +2610,28 @@ class PlayingIndicator(QWidget):
         self._playing = False
         self._t0 = time.monotonic()
         self._bar_heights = [0.45, 0.8, 0.6, 0.35]
+        self._live_until = 0.0          # mientras llegue audio real, no se simula
 
         self._timer = QTimer(self)
         self._timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._timer.setInterval(self._TICK_MS)
         self._timer.timeout.connect(self._tick)
+
+    def set_levels(self, bands):
+        """Audio real (ver audio_levels.py): las cuatro barras siguen graves,
+        medios-graves, medios y agudos. Si dejan de llegar niveles (el
+        visualizador se apaga o falla) vuelve solo la animación decorativa."""
+        if not self._playing or not bands:
+            return
+        n = len(bands)
+        cuts = [0, max(1, n // 8), max(2, n // 3), max(3, (2 * n) // 3), n]
+        heights = []
+        for i in range(self._BAR_COUNT):
+            group = bands[cuts[i]:max(cuts[i] + 1, cuts[i + 1])]
+            heights.append(0.15 + 0.85 * max(0.0, min(1.0, sum(group) / len(group))))
+        self._bar_heights = heights
+        self._live_until = time.monotonic() + 0.35
+        self.update()
 
     def set_color(self, rgb: tuple):
         c = QColor(*rgb)
@@ -2225,7 +2655,11 @@ class PlayingIndicator(QWidget):
         self._playing = playing
         if self._animate():
             self._t0 = time.monotonic()
-            self._timer.start()
+            # Solo si se ve: con la ventana oculta en la bandeja el temporizador seguía
+            # despertando al procesador 30 veces por segundo mientras sonaba música.
+            # showEvent lo arranca cuando la ventana vuelve a mostrarse.
+            if self.isVisible():
+                self._timer.start()
         else:
             self._timer.stop()
             self._bar_heights = [0.45, 0.8, 0.6, 0.35]
@@ -2241,6 +2675,8 @@ class PlayingIndicator(QWidget):
         super().hideEvent(event)
 
     def _tick(self):
+        if time.monotonic() < self._live_until:
+            return                          # hay audio real: no se pisa con la simulación
         t = time.monotonic() - self._t0     # reloj real: no se atrasa si Qt va justo
         for i in range(self._BAR_COUNT):
             # Dos senos de frecuencia distinta y fase propia por barra: no suben y
@@ -2284,3 +2720,147 @@ class PlayingIndicator(QWidget):
             painter.drawRoundedRect(rect, 1.4, 1.4)
             x += bar_w + gap
         painter.end()
+
+
+class SpectrumBars(QWidget):
+    """Barras de espectro de audio real (graves a la izquierda, agudos a la
+    derecha) con degradado del acento y una marca de "pico" que cae despacio.
+
+    Se alimenta de audio_levels.AudioLevels. Mientras está visible le pide al
+    servicio que capture (`acquire`) y al ocultarse lo suelta (`release`), así
+    no se analiza audio que nadie está viendo. Con "reducir movimiento" no se
+    usa: el visualizador es puro movimiento."""
+
+    _BAR_W = 4.0
+    _GAP = 3.0
+
+    def __init__(self, parent=None, height: int = 44):
+        super().__init__(parent)
+        self.setFixedHeight(height)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setAccessibleName("Visualizador de audio")
+        self._levels: list = []
+        self._peaks: list = []
+        self._source = None
+        self._color_a = QColor(*Palette.ACCENT_A)
+        self._color_b = QColor(*Palette.ACCENT_B)
+        self._last_levels_at = 0.0
+        # Las marcas de pico y las barras bajan por su cuenta: el servicio deja de
+        # emitir al llegar a cero y, sin esto, los picos quedaban congelados como
+        # puntos sueltos al pausar la música.
+        self._settle_timer = QTimer(self)
+        self._settle_timer.setInterval(33)
+        self._settle_timer.timeout.connect(self._settle)
+
+    def set_source(self, levels):
+        """Conecta (o desconecta con None) el servicio de niveles de audio."""
+        if self._source is levels:
+            return
+        if self._source is not None:
+            with contextlib.suppress(TypeError, RuntimeError):
+                self._source.levelsChanged.disconnect(self.set_levels)
+            if self.isVisible():
+                self._source.release(self)
+        self._source = levels
+        if levels is not None:
+            levels.levelsChanged.connect(self.set_levels)
+            if self.isVisible():
+                levels.acquire(self)
+
+    def set_colors(self, rgb_a: tuple, rgb_b: tuple):
+        self._color_a = QColor(*rgb_a)
+        self._color_b = QColor(*rgb_b)
+        self.update()
+
+    def _bar_count(self) -> int:
+        return max(8, int((self.width() + self._GAP) // (self._BAR_W + self._GAP)))
+
+    def set_levels(self, bands):
+        from audio_levels import resample_bands
+        n = self._bar_count()
+        shown = resample_bands(bands, n)
+        if len(self._peaks) != n:
+            self._peaks = [0.0] * n
+        self._peaks = [max(v, p) for v, p in zip(shown, self._peaks, strict=True)]
+        self._levels = shown
+        self._last_levels_at = time.monotonic()
+        if self.isVisible():
+            if not self._settle_timer.isActive():
+                self._settle_timer.start()
+            self.update()
+
+    def _settle(self):
+        """Marcas de pico: caen ~0,9 por segundo; si dejaron de llegar niveles
+        (música pausada o captura detenida) las barras también bajan a cero."""
+        dt = 0.033
+        self._peaks = [max(0.0, p - 0.9 * dt) for p in self._peaks]
+        if time.monotonic() - self._last_levels_at > 0.12:
+            self._levels = [max(0.0, v - 2.2 * dt) for v in self._levels]
+        if not any(v > 0.004 for v in self._levels) and not any(p > 0.004 for p in self._peaks):
+            self._levels, self._peaks = [], []
+            self._settle_timer.stop()
+        self.update()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        import theme as _theme
+        if self._source is not None and not _theme.REDUCED_MOTION:
+            self._source.acquire(self)
+
+    def hideEvent(self, event):
+        self._settle_timer.stop()
+        if self._source is not None:
+            self._source.release(self)
+        super().hideEvent(event)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        n = self._bar_count()
+        total = n * self._BAR_W + (n - 1) * self._GAP
+        x = (self.width() - total) / 2.0
+        height = float(self.height())
+        levels = self._levels if len(self._levels) == n else [0.0] * n
+        peaks = self._peaks if len(self._peaks) == n else [0.0] * n
+        if not any(v > 0.01 for v in levels) and not any(p > 0.01 for p in peaks):
+            idle = QColor(self._color_a)
+            idle.setAlpha(55)          # en reposo: una línea continua y tenue, no un hueco
+            painter.setBrush(idle)
+            painter.drawRoundedRect(QRectF(x, height - 3.0, total, 2.0), 1.0, 1.0)
+            painter.end()
+            return
+        grad = QLinearGradient(0, height, 0, 0)
+        grad.setColorAt(0.0, self._color_a)
+        grad.setColorAt(1.0, self._color_b.lighter(125))
+        cap = QColor(self._color_b.lighter(170))
+        for level, peak in zip(levels, peaks, strict=True):
+            bar_h = max(2.0, level * (height - 3.0))
+            rect = QRectF(x, height - bar_h, self._BAR_W, bar_h)
+            painter.setBrush(grad)
+            painter.drawRoundedRect(rect, 1.8, 1.8)
+            if peak > 0.04 and peak > level + 0.03:
+                cap.setAlpha(190)
+                painter.setBrush(cap)
+                painter.drawRoundedRect(QRectF(x, height - peak * (height - 3.0) - 3.0, self._BAR_W, 2.0), 1.0, 1.0)
+            x += self._BAR_W + self._GAP
+        painter.end()
+
+
+def sync_accessible_names(root: QWidget):
+    """Nombre accesible = tooltip, en los controles que no tienen texto propio (botones de
+    icono, deslizadores...). El narrador de Windows lee el nombre accesible, no el tooltip: un
+    botón de icono sin nombre se anunciaba solo como «botón». Los botones con texto ya tienen
+    nombre; el que se haya puesto a mano se respeta."""
+    from PyQt6.QtWidgets import QAbstractSlider, QComboBox, QLineEdit
+    kinds = (QAbstractButton, QAbstractSlider, QComboBox, QLineEdit)
+    for widget in root.findChildren(QWidget):
+        if not isinstance(widget, kinds) or widget.accessibleName():
+            continue
+        tip = widget.toolTip()
+        if not tip:
+            continue
+        text = widget.text() if isinstance(widget, QAbstractButton) else ""
+        if isinstance(text, str) and text.strip():
+            continue
+        widget.setAccessibleName(tip)

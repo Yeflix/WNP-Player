@@ -13,7 +13,8 @@ PASS, FAIL = [], []
 def check(name, cond, extra=""):
     (PASS if cond else FAIL).append(name); print(("  OK   " if cond else "  FALLA"), name, extra)
 
-from PyQt6.QtCore import QObject, QThreadPool, pyqtSignal, QEventLoop, QTimer
+import workers
+from PyQt6.QtCore import QObject, pyqtSignal, QEventLoop, QTimer
 from PyQt6.QtWidgets import QApplication
 app = QApplication([])
 import theme
@@ -104,13 +105,13 @@ loader = L.LyricsLoader()
 got = []
 loader.lyricsReady.connect(lambda k, r: got.append(r))
 loader.request("A", "T", "", 100)
-QThreadPool.globalInstance().waitForDone(); run(50)
+workers.default_pool().wait_for_done(); run(50)
 check("primera consulta: 'no encontrada' (None)", got == [None], str(got))
 loader.request("A", "T", "", 100)
-QThreadPool.globalInstance().waitForDone(); run(50)
+workers.default_pool().wait_for_done(); run(50)
 check("sin force sale de la caché (no vuelve a consultar)", len(fetch_calls) == 1 and got == [None, None])
 loader.request("A", "T", "", 100, force=True)
-QThreadPool.globalInstance().waitForDone(); run(50)
+workers.default_pool().wait_for_done(); run(50)
 check("con force=True vuelve a consultar y encuentra", len(fetch_calls) == 2 and got[-1] and got[-1]["plain"] == "ya está", str(got))
 
 # ------------------------------------------------------------------ 5

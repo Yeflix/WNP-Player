@@ -161,14 +161,33 @@ def _mods_to_flags(mods) -> int:
 
 
 # --- Integración con Windows -----------------------------------------------
+# Último código de error de RegisterHotKey (1409 = otra app ya usa esa combinación).
+ERROR_HOTKEY_ALREADY_REGISTERED = 1409
+_LAST_ERROR = [0]
+
+
+def failure_reason(code: int) -> str:
+    """Texto para el usuario según el error de Windows al registrar una tecla."""
+    if code == ERROR_HOTKEY_ALREADY_REGISTERED:
+        return "otro programa ya usa esta combinación"
+    if code:
+        return f"Windows no la aceptó (error {code})"
+    return "no se pudo activar"
+
 if IS_WINDOWS:
     import ctypes.wintypes as wintypes
     from PyQt6.QtCore import QAbstractNativeEventFilter
 
     _user32 = ctypes.windll.user32
+    # Copia con use_last_error: así se sabe POR QUÉ falló RegisterHotKey.
+    _user32_le = ctypes.WinDLL("user32", use_last_error=True)
+    _user32_le.RegisterHotKey.argtypes = (ctypes.c_void_p, ctypes.c_int, ctypes.c_uint, ctypes.c_uint)
+    _user32_le.RegisterHotKey.restype = ctypes.c_int
 
     def _win_register(hotkey_id: int, mods: set, vk: int) -> bool:
-        return bool(_user32.RegisterHotKey(None, hotkey_id, _mods_to_flags(mods), vk))
+        ok = bool(_user32_le.RegisterHotKey(None, hotkey_id, _mods_to_flags(mods), vk))
+        _LAST_ERROR[0] = 0 if ok else ctypes.get_last_error()
+        return ok
 
     def _win_unregister(hotkey_id: int) -> None:
         _user32.UnregisterHotKey(None, hotkey_id)
@@ -207,6 +226,9 @@ class HotkeyManager(QObject):
         self._ids: dict[str, int] = {}
         self._next_id = 1
         self._filter = None
+        # Acciones cuya combinación NO se pudo activar → (combinación, motivo).
+        # Antes un fallo al arrancar era silencioso: la tecla simplemente no hacía nada.
+        self.failures: dict[str, tuple[str, str]] = {}
 
     def install(self, app) -> None:
         if not self.available:
@@ -225,16 +247,19 @@ class HotkeyManager(QObject):
         lo que tuviera antes. Retorna False si el combo ya está en uso por
         Windows/otro programa, es inválido, o no estamos en Windows."""
         self.unregister(action)
+        self.failures.pop(action, None)
         if not self.available or not combo:
             return False
         mods, vk = _parse_combo(combo)
         if vk is None:
+            self.failures[action] = (combo, "combinación no válida")
             return False
         hotkey_id = self._next_id
         self._next_id += 1
         if _win_register(hotkey_id, mods, vk):
             self._ids[action] = hotkey_id
             return True
+        self.failures[action] = (combo, failure_reason(_LAST_ERROR[0]))
         return False
 
     def unregister(self, action: str) -> None:
@@ -245,3 +270,4 @@ class HotkeyManager(QObject):
     def unregister_all(self) -> None:
         for action in list(self._ids.keys()):
             self.unregister(action)
+        self.failures.clear()

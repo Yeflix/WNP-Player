@@ -14,12 +14,17 @@ import time
 import urllib.request
 from urllib.parse import urlsplit
 
-from PyQt6.QtCore import QObject, QRunnable, QThreadPool, QTimer, pyqtSignal
+import workers
+from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 from PyQt6.QtGui import QImage
 
 from accent import extract_accent_pair
 
-_REQUEST_HEADERS = {"User-Agent": "Mozilla/5.0 (WNP-Player)"}
+from version import APP_NAME
+import contextlib
+from diag import soft
+
+_REQUEST_HEADERS = {"User-Agent": f"Mozilla/5.0 ({APP_NAME})"}
 _MAX_CACHE_ITEMS = 24
 # Lado máximo (px) al que se reducen las carátulas ANTES de cachearlas. Algunos
 # servicios entregan portadas de 1200-3000 px: cada QImage cacheada pesaba
@@ -52,10 +57,8 @@ def _borrow_connection(scheme: str, host: str, port: int):
 
 def _return_connection(scheme: str, host: str, port: int, conn, reusable: bool):
     if not reusable:
-        try:
+        with soft("cover_loader._return_connection"):
             conn.close()
-        except Exception:
-            pass
         return
     key = (scheme, host, port)
     with _pool_lock:
@@ -107,9 +110,8 @@ class _JobSignals(QObject):
     finished = pyqtSignal(str, QImage, tuple, tuple)
 
 
-class _CoverJob(QRunnable):
+class _CoverJob:
     def __init__(self, url: str, signals: _JobSignals):
-        super().__init__()
         self.url = url
         self._signals = signals
 
@@ -141,10 +143,8 @@ class _CoverJob(QRunnable):
             from theme import Palette
             accent_a, accent_b = Palette.ACCENT_A, Palette.ACCENT_B
 
-        try:
+        with contextlib.suppress(RuntimeError):  # app cerrándose: el QObject de señales ya no existe
             self._signals.finished.emit(self.url, image, accent_a, accent_b)
-        except RuntimeError:
-            pass  # app cerrándose: el QObject de señales ya no existe
 
     def _download_with_retry(self) -> QImage:
         """Hasta _MAX_DOWNLOAD_ATTEMPTS intentos, con una pausa corta entre
@@ -152,18 +152,16 @@ class _CoverJob(QRunnable):
         que en realidad haya nada mal: una conexión reutilizada del pool
         (ver _http_get) que murió del lado del servidor justo antes de
         reusarse, o un corte de red de medio segundo. Corre en el hilo de
-        fondo del QThreadPool, así que la pausa entre intentos no bloquea
+        fondo del hilos de Python, así que la pausa entre intentos no bloquea
         la interfaz para nada — como mucho retrasa un poco esa carátula
         puntual."""
         for attempt in range(_MAX_DOWNLOAD_ATTEMPTS):
-            try:
+            with soft("cover_loader._CoverJob._download_with_retry"):
                 raw = _http_get(self.url)
                 image = QImage()
                 image.loadFromData(raw)
                 if not image.isNull():
                     return image
-            except Exception:
-                pass
             if attempt < _MAX_DOWNLOAD_ATTEMPTS - 1:
                 time.sleep(_RETRY_DELAY_SECONDS)
         return QImage()
@@ -192,7 +190,7 @@ class CoverArtLoader(QObject):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._pool = QThreadPool.globalInstance()
+        self._pool = workers.default_pool()
         self._cache: dict[str, QImage] = {}
         self._color_cache: dict[str, tuple] = {}
         self._pending: set[str] = set()

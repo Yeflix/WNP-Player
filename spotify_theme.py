@@ -21,6 +21,7 @@ import json
 from PyQt6.QtCore import QObject, pyqtSignal
 from PyQt6.QtNetwork import QHostAddress
 from PyQt6.QtWebSockets import QWebSocket, QWebSocketServer
+import contextlib
 
 DEFAULT_THEME_PORT = 8977
 
@@ -87,7 +88,7 @@ class SpotifyThemeBridge(QObject):
     def start(self) -> bool:
         if self.is_running:
             return True
-        server = QWebSocketServer("WNP Player - tema de Spotify",
+        server = QWebSocketServer("YefriPlayer - tema de Spotify",
                                   QWebSocketServer.SslMode.NonSecureMode, self)
         # Solo la propia PC: nunca otra máquina de la red.
         if not server.listen(QHostAddress("127.0.0.1"), self.port):
@@ -149,10 +150,8 @@ class SpotifyThemeBridge(QObject):
             return   # ya lo retiró stop(): nada más que avisar
         self._clients.remove(ws)
         if not self._clients:
-            try:
+            with contextlib.suppress(RuntimeError):  # el puente ya se destruyó (cierre de la app)
                 self.connectionChanged.emit(False)
-            except RuntimeError:
-                pass   # el puente ya se destruyó (cierre de la app)
 
     def _on_message(self, ws: QWebSocket, text: str):
         if len(text) > _MAX_MESSAGE_CHARS:

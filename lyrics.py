@@ -32,7 +32,7 @@ También se distingue un error real (sin conexión, tiempo agotado, servidor
 caído) de un "no encontrada" genuino, para poder avisar cuál de los dos
 pasó en vez de mostrar siempre el mismo mensaje ambiguo.
 
-La búsqueda corre en un hilo aparte (QThreadPool) para no bloquear la
+La búsqueda corre en un hilo aparte (hilos de Python, ver workers.py) para no bloquear la
 interfaz mientras se espera la respuesta de la red — mismo patrón que
 `cover_loader.py`.
 """
@@ -41,18 +41,26 @@ from __future__ import annotations
 import difflib
 import json
 import re
+import threading
 import time
 import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
 
-from PyQt6.QtCore import QObject, QRunnable, QThreadPool, pyqtSignal
+import workers
+from PyQt6.QtCore import QObject, pyqtSignal
+import contextlib
 
 _GET_URL = "https://lrclib.net/api/get"
 _SEARCH_URL = "https://lrclib.net/api/search"
 _TIMEOUT_SECONDS = 8
-_HEADERS = {"User-Agent": "WNP-Player/1.0 (+https://lrclib.net)"}
+_MAX_CACHE = 300          # letras en memoria (la caché ya no crece sin límite)
+_NEGATIVE_TTL_S = 90.0    # cuánto se recuerda un «no encontrada» antes de volver a intentar
+_PENDING_STUCK_S = 25.0   # una consulta en curso más vieja que esto se da por colgada
+from version import user_agent
+
+_HEADERS = {"User-Agent": user_agent()}
 
 _LRC_TIME_RE = re.compile(r"\[(\d+):(\d+(?:\.\d+)?)\]")
 
@@ -125,6 +133,16 @@ def query_candidates(artist: str, title: str) -> list[tuple[str, str]]:
     return out
 
 
+_MULTI_ARTIST_RE = re.compile(r"\s*(?:,|;|/|\s&\s|\+|\bfeat\.?\b|\bft\.?\b|\bfeaturing\b)\s*", re.I)
+
+
+def first_artist(artist: str) -> str:
+    """"Artista A, Artista B" / "A & B" / "A feat. B" -> "Artista A". Spotify y
+    YouTube Music entregan a veces todos los artistas juntos y lrclib solo
+    conoce al principal."""
+    return _MULTI_ARTIST_RE.split(artist or "", maxsplit=1)[0].strip()
+
+
 def _norm(text: str) -> str:
     text = unicodedata.normalize("NFKD", text or "")
     text = "".join(c for c in text if not unicodedata.combining(c)).lower()
@@ -179,25 +197,76 @@ def _cache_key(artist: str, title: str) -> str:
     return f"{artist.strip().lower()}::{title.strip().lower()}"
 
 
+# --- Cortesía con lrclib -------------------------------------------------------
+# Es una API pública gratuita mantenida por una persona. Se le pide poco y de a
+# una cosa por vez:
+#  - una sola petición en vuelo (candado): saltar muchas canciones seguidas ya
+#    no lanza consultas en paralelo;
+#  - si el usuario ya pasó a otra canción, las consultas pendientes de la
+#    anterior se abandonan en vez de seguir martillando el servidor;
+#  - ante un 429 (demasiadas consultas) se respeta Retry-After y no se insiste.
+_NETWORK_LOCK = threading.Lock()
+_ctx = threading.local()            # `should_continue` de la tarea que está corriendo
+_CANCELLED = "__cancelled__"
+_RATE_LIMIT_MESSAGE = ("El servidor de letras está limitando las consultas. "
+                       "Se volverá a intentar en unos segundos.")
+_blocked_until = 0.0                # time.monotonic() hasta el que no se consulta
+_DEFAULT_WAIT_S, _MIN_WAIT_S, _MAX_WAIT_S = 30.0, 5.0, 120.0
+
+
+def _rate_limited() -> bool:
+    return time.monotonic() < _blocked_until
+
+
+def rate_limit_remaining() -> float:
+    """Segundos que faltan para poder volver a consultar (0 si no hay espera)."""
+    return max(0.0, _blocked_until - time.monotonic())
+
+
+def _wait_from_header(value) -> float:
+    try:
+        seconds = float(str(value).strip())
+    except (TypeError, ValueError):
+        seconds = _DEFAULT_WAIT_S       # fecha HTTP u otro formato: espera por defecto
+    return max(_MIN_WAIT_S, min(_MAX_WAIT_S, seconds))
+
+
+def _is_stale() -> bool:
+    check = getattr(_ctx, "should_continue", None)
+    return check is not None and not check()
+
+
 def _http_get_json(url: str):
     """Hace la petición y devuelve (json, None) en éxito, (None, None) si
     el servidor respondió 'no encontrado' (404 — caso normal, no es un
     error), o (None, mensaje_de_error) si algo realmente falló (sin
-    conexión, tiempo agotado, servidor caído, etc)."""
-    try:
-        req = urllib.request.Request(url, headers=_HEADERS)
-        with urllib.request.urlopen(req, timeout=_TIMEOUT_SECONDS) as resp:
-            return json.loads(resp.read().decode("utf-8")), None
-    except urllib.error.HTTPError as exc:
-        if exc.code == 404:
-            return None, None  # "no encontrada", no es un error real
-        return None, f"El servidor de letras respondió con un error ({exc.code})."
-    except urllib.error.URLError as exc:
-        return None, f"No se pudo conectar con el servidor de letras: {exc.reason}"
-    except TimeoutError:
-        return None, "El servidor de letras tardó demasiado en responder."
-    except Exception as exc:  # noqa: BLE001
-        return None, f"Error inesperado al buscar la letra: {exc}"
+    conexión, tiempo agotado, servidor caído, límite de consultas, etc)."""
+    global _blocked_until  # noqa: PLW0603 — estado de módulo a propósito (lo leen otros módulos o las pruebas)
+    if _is_stale():
+        return None, _CANCELLED
+    with _NETWORK_LOCK:
+        if _is_stale():                 # mientras esperaba el turno cambió la canción
+            return None, _CANCELLED
+        if _rate_limited():
+            return None, _RATE_LIMIT_MESSAGE
+        try:
+            req = urllib.request.Request(url, headers=_HEADERS)
+            with urllib.request.urlopen(req, timeout=_TIMEOUT_SECONDS) as resp:
+                return json.loads(resp.read().decode("utf-8")), None
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                return None, None  # "no encontrada", no es un error real
+            if exc.code == 429:
+                wait = _wait_from_header(exc.headers.get("Retry-After") if exc.headers else None)
+                _blocked_until = time.monotonic() + wait
+                return None, _RATE_LIMIT_MESSAGE
+            return None, f"El servidor de letras respondió con un error ({exc.code})."
+        except urllib.error.URLError as exc:
+            return None, f"No se pudo conectar con el servidor de letras: {exc.reason}"
+        except TimeoutError:
+            return None, "El servidor de letras tardó demasiado en responder."
+        except Exception as exc:
+            return None, f"Error inesperado al buscar la letra: {exc}"
 
 
 _RETRY_DELAY_S = 1.0
@@ -205,9 +274,10 @@ _RETRY_DELAY_S = 1.0
 
 def _http_get_json_retry(url: str):
     """Como _http_get_json pero reintenta UNA vez un fallo transitorio (sin
-    conexión puntual, timeout, 5xx). Un 404 no se reintenta: no es un fallo."""
+    conexión puntual, timeout, 5xx). Un 404 no se reintenta: no es un fallo,
+    y tampoco se reintenta un límite de consultas ni una tarea abandonada."""
     data, error = _http_get_json(url)
-    if error:
+    if error and error != _CANCELLED and not _rate_limited():
         time.sleep(_RETRY_DELAY_S)
         data, error = _http_get_json(url)
     return data, error
@@ -271,6 +341,8 @@ def _fetch(artist: str, title: str, album: str = "", duration_seconds: int = 0) 
         result, error = _fetch_get(a, t, album if i == 0 else "", duration_seconds)
         if result is not None:
             return result
+        if error == _CANCELLED:
+            return {"cancelled": True}
         if error:
             first_error = first_error or error
             break                           # sin red no tiene sentido seguir con /get
@@ -283,6 +355,9 @@ def _fetch(artist: str, title: str, album: str = "", duration_seconds: int = 0) 
     searches.append((ca, ct, f"{ca} {ct}".strip()))
     if ca:
         searches.append(("", ct, ct))       # solo el título
+    fa = first_artist(ca)
+    if fa and fa != ca:                     # "A, B" -> "A"
+        searches.append((fa, ct, f"{fa} {ct}".strip()))
     seen = set()
     for a, t, q in searches:
         if (a, t, q) in seen:
@@ -291,8 +366,27 @@ def _fetch(artist: str, title: str, album: str = "", duration_seconds: int = 0) 
         result, error = _fetch_search(a, t, duration_seconds, q)
         if result is not None:
             return result
+        if error == _CANCELLED:
+            return {"cancelled": True}
         if error:
             return {"error": error}         # ya se reintentó; no insistir con más consultas
+
+    # 3) Último recurso: sin la duración. Los reproductores de escritorio a
+    # veces informan la duración de la canción ANTERIOR (o 0) al cambiar de
+    # tema, y con una duración equivocada TODAS las consultas anteriores
+    # descartan la letra correcta (diferencia > 25 s). Se busca de nuevo sin
+    # ese dato: queda la mejor coincidencia por título y artista.
+    if duration_seconds:
+        for a, t, q in ((ca, ct, f"{ca} {ct}".strip()), ("", ct, ct)):
+            if not t:
+                continue
+            result, error = _fetch_search(a, t, 0, q)
+            if result is not None:
+                return result
+            if error == _CANCELLED:
+                return {"cancelled": True}
+            if error:
+                break
     if first_error:
         return {"error": first_error}
     return None  # de verdad no existe en lrclib
@@ -302,9 +396,10 @@ class _JobSignals(QObject):
     finished = pyqtSignal(str, object)  # cache_key, dict|None
 
 
-class _LyricsJob(QRunnable):
-    def __init__(self, cache_key, artist, title, album, duration_seconds, signals):
-        super().__init__()
+class _LyricsJob:
+    def __init__(self, cache_key, artist, title, album, duration_seconds, signals,
+                 should_continue=None):
+        self._should_continue = should_continue
         self.cache_key = cache_key
         self.artist = artist
         self.title = title
@@ -313,13 +408,13 @@ class _LyricsJob(QRunnable):
         self._signals = signals
 
     def run(self):
-        result = _fetch(self.artist, self.title, self.album, self.duration_seconds)
+        _ctx.should_continue = self._should_continue
         try:
+            result = _fetch(self.artist, self.title, self.album, self.duration_seconds)
+        finally:
+            _ctx.should_continue = None
+        with contextlib.suppress(RuntimeError):
             self._signals.finished.emit(self.cache_key, result)
-        except RuntimeError:
-            # El QObject de señales ya fue destruido (la app se está cerrando
-            # con una búsqueda en vuelo): no hay a quién avisar, se descarta.
-            pass
 
 
 class LyricsLoader(QObject):
@@ -332,9 +427,11 @@ class LyricsLoader(QObject):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._pool = QThreadPool.globalInstance()
+        self._pool = workers.default_pool()
         self._cache: dict[str, dict | None] = {}
-        self._pending: set[str] = set()
+        self._pending: dict[str, float] = {}     # clave -> cuándo se lanzó la consulta
+        self._negative_until: dict[str, float] = {}   # "no encontrada" con caducidad
+        self._current_key = ""          # la canción que el usuario tiene ahora
         self._signals = _JobSignals()
         self._signals.finished.connect(self._on_job_finished)
 
@@ -343,18 +440,46 @@ class LyricsLoader(QObject):
         """`force=True` (botón de recarga) ignora la caché —incluido un "no
         encontrada" anterior— y vuelve a consultar."""
         key = _cache_key(artist, title)
+        self._current_key = key         # las consultas de otras canciones quedan obsoletas
         if force:
             self._cache.pop(key, None)
+            self._negative_until.pop(key, None)
         if key in self._cache:
             self.lyricsReady.emit(key, self._cache[key])
             return
-        if key in self._pending:
+        if time.monotonic() < self._negative_until.get(key, 0.0):
+            self.lyricsReady.emit(key, None)        # "no encontrada" reciente: no insistir
             return
-        self._pending.add(key)
-        self._pool.start(_LyricsJob(key, artist, title, album, duration_seconds, self._signals))
+        started = self._pending.get(key)
+        if started is not None and time.monotonic() - started < _PENDING_STUCK_S:
+            return                       # ya hay una consulta en curso para esta canción
+        # (si lleva demasiado tiempo se la considera colgada y se lanza otra)
+        self._pending[key] = time.monotonic()
+        self._pool.start(_LyricsJob(key, artist, title, album, duration_seconds, self._signals,
+                                    should_continue=lambda k=key: self._current_key == k))
 
     def _on_job_finished(self, key: str, result):
-        self._pending.discard(key)
-        if not (isinstance(result, dict) and "error" in result):
+        self._pending.pop(key, None)
+        if isinstance(result, dict) and result.get("cancelled"):
+            # El usuario cambió de canción mientras se buscaba. Ni se guarda ni
+            # se cachea, pero SE AVISA: si algún panel siguiera esperando esta
+            # canción (p. ej. volvió a ella justo ahora) se quedaría en
+            # «Buscando letra…» para siempre. Los paneles de otra canción
+            # ignoran el aviso (la clave no coincide).
+            self.lyricsReady.emit(key, {"error": "La búsqueda se interrumpió. Se reintentará.",
+                                        "transient": True})
+            return
+        if isinstance(result, dict) and "error" in result:
+            pass                                        # los errores nunca se cachean
+        elif result is None:
+            # «No encontrada» NO se guarda para siempre: los metadatos de los
+            # reproductores de escritorio llegan a medias (duración o álbum
+            # tardan) y una consulta temprana puede fallar aunque la letra exista.
+            self._negative_until[key] = time.monotonic() + _NEGATIVE_TTL_S
+            while len(self._negative_until) > _MAX_CACHE:
+                self._negative_until.pop(next(iter(self._negative_until)))
+        else:
             self._cache[key] = result
+            while len(self._cache) > _MAX_CACHE:      # caché acotada: el más antiguo sale
+                self._cache.pop(next(iter(self._cache)))
         self.lyricsReady.emit(key, result)

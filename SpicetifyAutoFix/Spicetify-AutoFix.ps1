@@ -214,11 +214,15 @@ function Get-ParcheCacheado($State) {
     return $r
 }
 
+# Spicetify puede hacer preguntas ("There is available backup, clear current backup? [Y/n]")
+# y, sin nadie que conteste, la corrida oculta se quedaba esperando. Se le pasan
+# respuestas afirmativas por la entrada estandar: si no pregunta nada, las ignora.
+# (No se usa -q/--quiet porque tambien silencia la salida que se guarda en el registro.)
 function Invoke-Spicetify([string]$Exe, [string[]]$CommandArgs) {
     $text = ''
     $code = 1
     try {
-        $text = (& $Exe @CommandArgs 2>&1 | ForEach-Object { "$_" } | Out-String)
+        $text = (@('y', 'y', 'y') | & $Exe @CommandArgs 2>&1 | ForEach-Object { "$_" } | Out-String)
         $code = $LASTEXITCODE
     } catch {
         $text = $_.Exception.Message
@@ -335,13 +339,23 @@ try {
 
     # 4) Reaplicar
     Write-Log "Reaplicando Spicetify. Motivo: $reason."
+    if (Get-Process -Name $NombreProceso -ErrorAction SilentlyContinue) {
+        Write-Log 'Spotify esta abierto: Spicetify lo reiniciara al terminar.'
+    }
     $now = (Get-Date).ToString('s')
     if ($state.version -ne $actualBase) { $state.fallos = 0; $state.pausaAvisada = '' }
     $state.version = $actualBase
     $state.ultimoIntento = $now
     if ($needB) { $state.ultimoIntentoB = $now }
 
-    $result = Invoke-Spicetify $SpicetifyExe @('backup', 'apply')
+    # "spicetify backup apply" ABRE Spotify al terminar (issue spicetify/cli#2204). Si
+    # Spotify estaba cerrado (el caso tipico: el vigilante actua justo al cerrarlo) se
+    # pasa -n / --no-restart para que no se vuelva a abrir solo delante del usuario.
+    # Si estaba abierto con ventana, se deja que lo reinicie para que el tema se vea ya.
+    $spotifyAbierto = [bool](Get-Process -Name $NombreProceso -ErrorAction SilentlyContinue)
+    $flags = @()
+    if (-not $spotifyAbierto) { $flags += '-n' }
+    $result = Invoke-Spicetify $SpicetifyExe ($flags + @('backup', 'apply'))
     $ok = ($result.Code -eq 0)
 
     if ($ok) {
@@ -369,7 +383,7 @@ try {
         $state.fallos = [int]$state.fallos + 1
         Write-Log ("FALLO ({0} de {1}): 'spicetify backup apply' devolvio {2}. Salida: {3}" -f $state.fallos, $MaxFallos, $result.Code, (Format-Output $result.Output))
         # Dejar Spotify funcional (sin tema) en vez de roto
-        $restore = Invoke-Spicetify $SpicetifyExe @('restore')
+        $restore = Invoke-Spicetify $SpicetifyExe ($flags + @('restore'))
         Write-Log ("'spicetify restore' (para que Spotify abra normal) devolvio {0}. Salida: {1}" -f $restore.Code, (Format-Output $restore.Output))
         Set-Heartbeat ("fallo al reaplicar ({0}/{1})" -f $state.fallos, $MaxFallos)
     }

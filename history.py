@@ -8,12 +8,12 @@ from __future__ import annotations
 
 import datetime
 import json
-import os
 from pathlib import Path
 
 import ad_filter
 import ad_log
-from config import _config_dir
+from config import _config_dir, _replace_with_retry
+from diag import soft
 
 HISTORY_FILENAME = "history.json"
 MAX_ENTRIES = 300
@@ -44,12 +44,10 @@ def _load_checked() -> list[dict] | None:
     try:
         data = json.loads(text)
     except ValueError:
-        try:
+        with soft("history._load_checked"):
             backup = path.with_name(path.name + ".corrupt")
             if not backup.exists():
                 backup.write_text(text, encoding="utf-8")
-        except Exception:
-            pass
         return []
     return data if isinstance(data, list) else []
 
@@ -90,13 +88,11 @@ def purge_ads_from_history() -> int:
         (ads if reason else clean).append((e, reason) if reason else e)
     if not ads:
         return 0
-    try:
+    with soft("history.purge_ads_from_history"):
         path = _history_path()
         bak = path.with_suffix(".json.bak")
         if path.exists() and not bak.exists():
             bak.write_bytes(path.read_bytes())
-    except Exception:
-        pass
     rows = [ad_log._row(e.get("title"), e.get("artist"), e.get("player_name"),
                         e.get("duration_seconds"), f"migrado:{reason}", e.get("played_at"))
             for e, reason in ads]
@@ -110,7 +106,7 @@ def _save(entries: list[dict]) -> None:
     """Escritura atómica (ver el mismo comentario en config.py:save) — acá
     el riesgo es peor porque se guarda en CADA canción nueva detectada,
     no solo cada 20s."""
-    try:
+    with soft("history._save"):
         path = _history_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = path.with_suffix(".json.tmp")
@@ -118,9 +114,7 @@ def _save(entries: list[dict]) -> None:
             json.dumps(entries[-MAX_ENTRIES:], indent=2, ensure_ascii=False),
             encoding="utf-8",
         )
-        os.replace(tmp_path, path)
-    except Exception:
-        pass
+        _replace_with_retry(tmp_path, path)   # reintenta si el antivirus lo tiene abierto un instante
 
 
 def add_entry(title: str, artist: str, player_name: str = "", duration_seconds: int = 0) -> list[dict]:
@@ -152,20 +146,56 @@ def add_entry(title: str, artist: str, player_name: str = "", duration_seconds: 
     entries = [e for e in raw if _entry_ad_reason(e) is None]
     if entries and entries[-1].get("title") == title and entries[-1].get("artist") == artist:
         return entries
+    before = list(entries)
+    played_at = datetime.datetime.now().isoformat(timespec="seconds")
     entries.append({
         "title": title,
         "artist": artist,
         "player_name": player_name,
-        "played_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        "played_at": played_at,
         "duration_seconds": duration_seconds,
     })
     entries = entries[-MAX_ENTRIES:]
     _save(entries)
+    # Estadísticas acumuladas (sin el límite de 300): ver stats_store.py.
+    with soft("history.add_entry.stats_store"):
+        import stats_store
+        stats_store.record(title, artist, duration_seconds, played_at, history_before=before)
     return entries
 
 
 def clear() -> None:
+    """Borra el historial y, con él, las estadísticas acumuladas (quien borra
+    lo que escuchó espera que se olvide también en Estadísticas)."""
     _save([])
+    with soft("history.clear.stats_store"):
+        import stats_store
+        stats_store.clear()
+
+
+CSV_COLUMNS = ("fecha", "titulo", "artista", "reproductor", "duracion_segundos")
+
+
+def export_csv(path, entries: list[dict] | None = None) -> int:
+    """Guarda el historial en un CSV (UTF-8 con BOM, para que Excel muestre bien
+    los acentos). Devuelve cuántas filas escribió. Lanza OSError si no se puede
+    escribir (quien llama lo muestra al usuario)."""
+    import csv
+    rows = load() if entries is None else entries
+    count = 0
+    with open(path, "w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.writer(f, delimiter=";")    # ; = lo que espera Excel en español
+        writer.writerow(CSV_COLUMNS)
+        for e in rows:
+            writer.writerow([
+                str(e.get("played_at") or ""),
+                ad_log._safe_cell(str(e.get("title") or "")),    # mismo escape de fórmulas que anuncios.csv
+                ad_log._safe_cell(str(e.get("artist") or "")),
+                ad_log._safe_cell(str(e.get("player_name") or "")),
+                str(e.get("duration_seconds") or 0),
+            ])
+            count += 1
+    return count
 
 
 def format_relative_time(iso_string: str) -> str:

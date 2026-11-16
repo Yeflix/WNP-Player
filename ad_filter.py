@@ -28,6 +28,7 @@ import json
 import unicodedata
 
 from config import _config_dir
+from diag import soft
 
 RULES_FILENAME = "ad_rules.json"
 
@@ -51,26 +52,24 @@ def _norm(text) -> str:
 def _load_extra() -> tuple[frozenset, frozenset]:
     """(artistas, títulos) extra del archivo del usuario. Nunca falla: si no
     existe o está mal formado, no hay reglas extra."""
-    global _extra_cache
+    global _extra_cache  # noqa: PLW0603 — estado de módulo a propósito (lo leen otros módulos o las pruebas)
     if _extra_cache is not None:
         return _extra_cache
     artists, titles = frozenset(), frozenset()
-    try:
+    with soft("ad_filter._load_extra"):
         path = _config_dir() / RULES_FILENAME
         if path.exists():
             data = json.loads(path.read_text(encoding="utf-8"))
             if isinstance(data, dict):
                 artists = frozenset(_norm(x) for x in data.get("artistas", []) if _norm(x))
                 titles = frozenset(_norm(x) for x in data.get("titulos", []) if _norm(x))
-    except Exception:
-        pass
     _extra_cache = (artists, titles)
     return _extra_cache
 
 
 def reload_rules() -> None:
     """Vuelve a leer ad_rules.json (para pruebas, o tras editarlo)."""
-    global _extra_cache
+    global _extra_cache  # noqa: PLW0603 — estado de módulo a propósito (lo leen otros módulos o las pruebas)
     _extra_cache = None
 
 

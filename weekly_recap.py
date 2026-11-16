@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
 
 from theme import Palette, FONT_BODY
 from widgets import IconButton
+import contextlib
 
 SLIDE_MS = 2600
 FADE_MS = 240
@@ -126,20 +127,16 @@ class WeeklyRecapToast(QWidget):
         if self._closing:
             return
         self._fade_anim.stop()
-        try:
+        with contextlib.suppress(TypeError):
             self._fade_anim.finished.disconnect()
-        except TypeError:
-            pass
         self._fade_anim.setStartValue(1.0)
         self._fade_anim.setEndValue(0.0)
         self._fade_anim.finished.connect(self._on_fade_out_finished)
         self._fade_anim.start()
 
     def _on_fade_out_finished(self):
-        try:
+        with contextlib.suppress(TypeError):
             self._fade_anim.finished.disconnect(self._on_fade_out_finished)
-        except TypeError:
-            pass
         self._index += 1
         if self._index >= len(self._slides):
             self._start_close()
@@ -159,10 +156,8 @@ class WeeklyRecapToast(QWidget):
         self._window_anim.setStartValue(self.windowOpacity())
         self._window_anim.setEndValue(0.0)
         self._window_anim.setEasingCurve(QEasingCurve.Type.InCubic)
-        try:
+        with contextlib.suppress(TypeError):
             self._window_anim.finished.disconnect()
-        except TypeError:
-            pass
         self._window_anim.finished.connect(self.close)
         self._window_anim.start()
 

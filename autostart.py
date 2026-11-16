@@ -1,11 +1,11 @@
-"""Iniciar WNP Player junto con Windows.
+"""Iniciar YefriPlayer junto con Windows.
 
 Usa la clave de registro por-usuario `HKCU\\Software\\Microsoft\\Windows\\
 CurrentVersion\\Run` (no pide permisos de administrador y es la misma que
 usan casi todos los programas). Funciona igual con el `.exe` empaquetado
-(PyInstaller) que ejecutando `python main.py`:
+(PyInstaller o Nuitka) que ejecutando `python main.py`:
 
-- `.exe`: el comando es la ruta del propio ejecutable (`sys.executable`).
+- `.exe`: el comando es la ruta del propio ejecutable (`version.executable_path()`).
   Como se vuelve a escribir en cada arranque (`sync`), si el usuario mueve el
   `.exe` a otra carpeta la entrada se corrige sola en la siguiente ejecución.
 - Desde código fuente: `pythonw.exe main.py` (sin ventana de consola).
@@ -22,8 +22,13 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+from version import executable_path, is_frozen
+
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
-VALUE_NAME = "WNPPlayer"
+VALUE_NAME = "YefriPlayer"
+# Nombres de entrada usados por versiones anteriores (YefriPlayer). Se eliminan
+# para que el programa no arranque dos veces ni apunte a un .exe que ya no existe.
+LEGACY_VALUE_NAMES = ("WNPPlayer",)
 
 
 def _winreg():
@@ -38,15 +43,20 @@ def is_supported() -> bool:
     return _winreg() is not None
 
 
+# Le dice al programa que lo abrió Windows al iniciar sesión: solo entonces se
+# respeta «Iniciar minimizado» (abrirlo a mano siempre muestra la ventana).
+AUTOSTART_FLAG = "--inicio-windows"
+
+
 def launch_command() -> str:
     """Comando que Windows ejecutará al iniciar sesión."""
-    if getattr(sys, "frozen", False):          # .exe de PyInstaller
-        return f'"{sys.executable}"'
+    if is_frozen():                            # .exe de PyInstaller o de Nuitka
+        return f'"{executable_path()}" {AUTOSTART_FLAG}'   # en --onefile de Nuitka, NO la copia temporal
     exe = Path(sys.executable)
     pyw = exe.with_name("pythonw.exe")
     interpreter = pyw if pyw.exists() else exe
     script = Path(__file__).resolve().with_name("main.py")
-    return f'"{interpreter}" "{script}"'
+    return f'"{interpreter}" "{script}" {AUTOSTART_FLAG}'
 
 
 def registered_command() -> str | None:
@@ -66,6 +76,15 @@ def is_enabled() -> bool:
     return registered_command() is not None
 
 
+def _remove_legacy(reg) -> None:
+    for name in LEGACY_VALUE_NAMES:
+        try:
+            with reg.OpenKey(reg.HKEY_CURRENT_USER, RUN_KEY, 0, reg.KEY_SET_VALUE) as key:
+                reg.DeleteValue(key, name)
+        except OSError:
+            pass          # no existía: lo normal
+
+
 def set_enabled(enabled: bool) -> bool:
     """Crea/actualiza o elimina la entrada. Devuelve True si el registro
     quedó como se pidió (False si no hay Windows o el registro falló)."""
@@ -73,6 +92,7 @@ def set_enabled(enabled: bool) -> bool:
     if reg is None:
         return False
     try:
+        _remove_legacy(reg)
         if enabled:
             command = launch_command()
             if registered_command() == command:

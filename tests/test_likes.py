@@ -17,7 +17,8 @@ PASS, FAIL = [], []
 def check(name, cond, extra=""):
     (PASS if cond else FAIL).append(name); print(("  OK   " if cond else "  FALLA"), name, extra)
 
-from PyQt6.QtCore import QEventLoop, QThreadPool, QTimer
+import workers
+from PyQt6.QtCore import QEventLoop, QTimer
 from PyQt6.QtWidgets import QApplication
 app = QApplication([])
 import theme
@@ -32,7 +33,7 @@ def run(ms):
     loop = QEventLoop(); QTimer.singleShot(ms, loop.quit); loop.exec()
 
 def settle():
-    QThreadPool.globalInstance().waitForDone(); run(30); app.processEvents()
+    workers.default_pool().wait_for_done(); run(30); app.processEvents()
 
 # ------------------------------------------------------------------ 1
 print("== 1) PKCE")
@@ -283,7 +284,7 @@ routes[("PUT", likes.SPOTIFY_API + "/me/library")] = lambda url: (time.sleep(0.3
 mgr.toggle()
 mgr.track_changed(playing(title="Otra Canción"))
 n = len(infos)
-QThreadPool.globalInstance().waitForDone(); run(60)
+workers.default_pool().wait_for_done(); run(60)
 check("respuesta de la canción anterior se ignora", all(i.liked is not True for i in infos[n:]) , str([i.liked for i in infos[n:]]))
 settle()
 

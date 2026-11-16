@@ -35,6 +35,7 @@ from __future__ import annotations
 import math
 import os
 import sys
+import contextlib
 
 STANDARD_REFERENCE = (1920, 1080)   # solo documentación: Full HD al 100 %
 FIT_HEIGHT = 660                    # ventana más alta (606) + 48 de margen
@@ -107,10 +108,8 @@ def _query_primary_work_area_win32() -> tuple[int, int, int] | None:
         if not user32.GetMonitorInfoW(hmon, ctypes.byref(info)):
             return None
         dpi_x, dpi_y = wintypes.UINT(96), wintypes.UINT(96)
-        try:
+        with contextlib.suppress(Exception):  # sin shcore: 96 DPI
             ctypes.windll.shcore.GetDpiForMonitor(hmon, 0, ctypes.byref(dpi_x), ctypes.byref(dpi_y))
-        except Exception:
-            pass                                                           # sin shcore: 96 DPI
         w = info.rcWork.right - info.rcWork.left
         h = info.rcWork.bottom - info.rcWork.top
         return (w, h, int(dpi_x.value) or 96) if w > 0 and h > 0 else None
