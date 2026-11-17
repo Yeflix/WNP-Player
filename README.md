@@ -7,10 +7,9 @@
 No reproduce audio: muestra y controla lo que ya suena en tu navegador y en tus apps de escritorio,<br>
 con carátula, letras, visualizador de audio y teclas rápidas, desde una sola ventana.
 
-[![Descargar para Windows](https://img.shields.io/badge/Descargar-Windows%2010%20%2F%2011-2979ff?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/Yeflix/yefriplayer/releases/latest)
+[![Descargar para Windows](https://img.shields.io/badge/Descargar-Windows%2010%20%2F%2011-2979ff?style=for-the-badge&logo=googledrive&logoColor=white)][descarga]
 
 [![Última versión](https://img.shields.io/github/v/release/Yeflix/yefriplayer?label=versi%C3%B3n&color=ff4757)](https://github.com/Yeflix/yefriplayer/releases/latest)
-[![Descargas](https://img.shields.io/github/downloads/Yeflix/yefriplayer/total?label=descargas&color=2979ff)](https://github.com/Yeflix/yefriplayer/releases)
 [![Licencia GPL-3.0](https://img.shields.io/github/license/Yeflix/yefriplayer?label=licencia)](LICENSE)
 ![Windows 10/11 · 64 bits](https://img.shields.io/badge/Windows-10%20%2F%2011%20%C2%B7%2064%20bits-555)
 
@@ -43,18 +42,27 @@ YefriPlayer es un **controlador multimedia**. No sustituye a Spotify ni a YouTub
 
 ## Descargar e instalar
 
-1. Descarga **`YefriPlayer-<versión>-Setup.exe`** desde la [última versión](https://github.com/Yeflix/yefriplayer/releases/latest) (sección *Assets*).
+1. Entra en la **[carpeta de descargas de Google Drive][descarga]** y descarga el archivo **`YefriPlayer-<versión>-Setup.exe`** de la versión más alta (clic derecho sobre el archivo → **Descargar**).
+   - Como el instalador es grande, Google Drive avisa de que **no puede analizarlo en busca de virus**. Es normal en archivos de ese tamaño: pulsa **Descargar de todas formas**.
 2. Ábrelo y sigue el asistente. Se instala **solo para tu usuario y sin pedir permisos de administrador**. Si prefieres instalarlo para todos los usuarios, el asistente te deja elegirlo.
 3. Al terminar se abre una **bienvenida de tres pasos** que te guía para conectar la música y comprueba en vivo que todo funciona.
 
 > [!NOTE]
-> El instalador todavía no tiene firma digital, así que la primera vez Windows SmartScreen puede mostrar «Windows protegió su PC». Pulsa **Más información → Ejecutar de todas formas**. Si quieres comprobar el archivo, cada versión publica su **SHA-256** junto al instalador.
+> El instalador todavía no tiene firma digital, así que la primera vez Windows SmartScreen puede mostrar «Windows protegió su PC». Pulsa **Más información → Ejecutar de todas formas**.
+
+**Comprobar que el archivo es el original (opcional).** Cada versión publica la huella **SHA-256** de su instalador en sus [notas de versión](https://github.com/Yeflix/yefriplayer/releases). En PowerShell, desde la carpeta de descargas:
+
+```powershell
+Get-FileHash .\YefriPlayer-<versión>-Setup.exe -Algorithm SHA256
+```
+
+Si el resultado coincide con el publicado, el archivo no se ha alterado.
 
 **Requisitos:** Windows 10 u 11 de 64 bits. No necesitas instalar Python ni nada más.
 
 YefriPlayer queda registrado como cualquier programa: aparece en **Inicio**, en **Configuración → Aplicaciones → Aplicaciones instaladas** (desde donde se desinstala) y se abre con **Win + R → `YefriPlayer`**. Vive en la bandeja del sistema, junto al reloj.
 
-**Actualizaciones:** una vez al día comprueba si hay una versión nueva aquí en GitHub. Si la hay, te avisa y se actualiza con un clic: descarga el instalador, verifica su SHA-256 y conserva tu configuración. Puedes desactivarlo en Configuración.
+**Actualizaciones:** una vez al día YefriPlayer comprueba aquí en GitHub si hay una versión nueva. Si la hay, te avisa y te lleva a su página, con el enlace de descarga. Descarga el instalador nuevo y ábrelo: actualiza la versión anterior y **conserva tu configuración, historial y estadísticas**. El aviso se puede desactivar en Configuración.
 
 ## Conectar la música del navegador
 
@@ -135,7 +143,7 @@ Windows solo deja que **un** programa use cada combinación. Si otro ya la tiene
 <details>
 <summary><b>Windows SmartScreen o el antivirus avisan</b></summary>
 
-El instalador no tiene firma digital todavía. Descárgalo solo desde la [página de versiones](https://github.com/Yeflix/yefriplayer/releases) de este repositorio y, si quieres, compara su SHA-256 con el publicado. Spicetify AutoFix usa un pequeño lanzador que abre PowerShell en segundo plano, algo que a algunos antivirus no les gusta: si lo bloquea, AutoFix usa otro método automáticamente.
+El instalador no tiene firma digital todavía. Descárgalo solo desde el [enlace oficial de Google Drive][descarga] que aparece en este README y, si quieres, compara su SHA-256 con el publicado (ver [Descargar e instalar](#descargar-e-instalar)). Google Drive también avisa de que no puede analizarlo en busca de virus: le pasa a todos los archivos grandes. Spicetify AutoFix usa un pequeño lanzador que abre PowerShell en segundo plano, algo que a algunos antivirus no les gusta: si lo bloquea, AutoFix usa otro método automáticamente.
 </details>
 
 <details>
@@ -179,7 +187,7 @@ python main.py
 | Documento | Contenido |
 |---|---|
 | [`docs/DESARROLLO.md`](docs/DESARROLLO.md) | Cómo funciona por dentro, estructura, pruebas, compilar con Nuitka o PyInstaller, crear el instalador y las reglas del proyecto |
-| [`docs/PUBLICAR.md`](docs/PUBLICAR.md) | Cómo sacar una versión en GitHub para que las copias instaladas se actualicen solas |
+| [`docs/PUBLICAR.md`](docs/PUBLICAR.md) | Cómo sacar una versión: subir el instalador y avisar a las copias instaladas |
 | [`CHANGELOG.md`](CHANGELOG.md) | Historial de versiones |
 
 Los errores y las sugerencias van en [Issues](https://github.com/Yeflix/yefriplayer/issues). Si mandas cambios, ejecuta antes las pruebas (`tests/`) y la autoprueba (`python main.py --autotest`).
@@ -190,3 +198,7 @@ Los errores y las sugerencias van en [Issues](https://github.com/Yeflix/yefripla
 - Se apoya en [pywnp](https://pypi.org/project/pywnp/) y la extensión [WebNowPlaying](https://wnp.keifufu.dev) de keifufu, [PyQt6](https://www.riverbankcomputing.com/software/pyqt/), [aiohttp](https://github.com/aio-libs/aiohttp), [winsdk](https://pypi.org/project/winsdk/), [numpy](https://numpy.org), [PyAudioWPatch](https://pypi.org/project/PyAudioWPatch/) y las letras de [lrclib.net](https://lrclib.net).
 - Proyecto independiente, **sin afiliación ni respaldo** de Spotify, Google/YouTube, Last.fm, ListenBrainz ni WebNowPlaying. Los nombres y marcas pertenecen a sus dueños.
 - Licencia **[GNU GPL v3.0](LICENSE)**. Copyright © 2026 YefriDev.
+
+<!-- Enlace de descarga: carpeta pública de Google Drive con los instaladores.
+     Es el ÚNICO sitio donde hay que cambiarlo (lo usan el botón y las secciones de arriba). -->
+[descarga]: https://drive.google.com/drive/folders/PEGA-AQUI-EL-ID-DE-LA-CARPETA

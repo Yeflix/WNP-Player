@@ -183,9 +183,9 @@ def main(argv: list[str] | None = None) -> int:
     print("\nInstalación silenciosa (por ejemplo, para varios equipos):\n"
           f"  {out.name} /VERYSILENT /SUPPRESSMSGBOXES /CURRENTUSER\n"
           "  (añade /TASKS=\"autofix\" para instalar también Spicetify AutoFix)")
-    print(f"\nPara que las copias instaladas se actualicen solas: publica en GitHub una release\n"
-          f"con la etiqueta v{V.APP_VERSION} y adjunta {out.name} sin cambiarle el nombre\n"
-          "(paso a paso en docs/PUBLICAR.md).")
+    print(f"\nPara publicarla: sube {out.name} a la carpeta de Google Drive (sin renombrarlo) y crea\n"
+          f"en GitHub la release v{V.APP_VERSION} con el enlace y el SHA-256 en sus notas, para que las\n"
+          "copias instaladas avisen. Paso a paso en docs/PUBLICAR.md.")
     return 0
 
 

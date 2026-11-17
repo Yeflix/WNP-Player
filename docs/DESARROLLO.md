@@ -272,7 +272,7 @@ python tools/construir_instalador.py --nuitka=--mingw --nuitka=--asumir-si   # o
 
 O doble clic en `Construir-Instalador.bat` (usa `.venv` si existe, si no `py -3.12`). Resultado: `dist-installer/YefriPlayer-<versión>-Setup.exe` y su SHA-256. La versión sale de `version.py`; si la compilación o su `--autotest` fallan, no se crea el instalador. El script de Inno Setup es `installer/YefriPlayer.iss`: **no cambies su `AppId`** (es lo que permite actualizar y desinstalar las versiones anteriores). Sin firma digital, Windows SmartScreen avisará la primera vez («Más información → Ejecutar de todas formas»).
 
-**Publicar una versión** (para que las copias instaladas se actualicen solas): paso a paso en [PUBLICAR.md](PUBLICAR.md). Lo esencial: etiqueta `v<versión>` igual a `version.py`, *release* publicada (no borrador ni *pre-release*) y el archivo `YefriPlayer-<versión>-Setup.exe` adjunto con ese nombre exacto.
+**Publicar una versión:** paso a paso en [PUBLICAR.md](PUBLICAR.md). El instalador se sube a una carpeta pública de Google Drive (el enlace del README) y en GitHub se crea una *release* `v<versión>` (igual que `version.py`, publicada, ni borrador ni *pre-release*) cuyas notas llevan el enlace y el SHA-256: es lo que consulta el programa para avisar. Si además se adjunta `YefriPlayer-<versión>-Setup.exe` con ese nombre exacto a la *release* (cabe: hasta 2 GiB por archivo), las copias instaladas se actualizan con un clic.
 
 **Ejecutar la autoprueba desde PowerShell.** PowerShell no busca programas en la carpeta actual ni en la de instalación: hay que dar la ruta (y `&` delante si va entre comillas). Con el programa instalado:
 
@@ -383,7 +383,7 @@ Parámetros del instalador: `-EsperarSpotifyCerrado`, `-CadaMinutos` (métodos 2
 - **Volumen** de apps de escritorio: es el volumen de la aplicación en Windows (Mezclador de volumen), no la barra interna de Spotify; solo si la app tiene una sesión de audio abierta.
 - **Visualizador por aplicación:** con fuentes del navegador escucha el navegador entero (todas sus pestañas). Requiere Windows 10 build 20348+ (oficialmente) o lo que permita tu Windows; si falla, usa todo el equipo y no lo reintenta con ese reproductor durante 10 min. Abrir la captura puede tardar hasta ~3 s la primera vez.
 - **Botones de la barra de tareas:** solo con la ventana completa (la compacta y el panel no tienen botón en la barra).
-- **Actualización con un clic:** solo si la versión en GitHub publica el archivo `YefriPlayer-<versión>-Setup.exe`; si no, se abre la página de la versión.
+- **Actualización con un clic:** solo si la *release* de GitHub lleva adjunto `YefriPlayer-<versión>-Setup.exe`; si el instalador está en Google Drive, «Actualizar» abre la página de la versión (con el enlace de descarga en sus notas).
 - **Windows:** reiniciar el servidor de pywnp puede dejar dos hilos de posición hasta el siguiente evento (la barra avanza al doble un momento); `HttpServer.stop()` bloquea la interfaz ~0,5 s.
 - **La letra puede fallar** si lrclib no tiene la canción; el botón de recarga permite reintentar.
 
