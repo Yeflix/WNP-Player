@@ -201,4 +201,4 @@ Los errores y las sugerencias van en [Issues](https://github.com/Yeflix/yefripla
 
 <!-- Enlace de descarga: carpeta pública de Google Drive con los instaladores.
      Es el ÚNICO sitio donde hay que cambiarlo (lo usan el botón y las secciones de arriba). -->
-[descarga]: https://drive.google.com/drive/folders/PEGA-AQUI-EL-ID-DE-LA-CARPETA
+[descarga]: https://drive.google.com/file/d/1U866IsHkkrNOiop39ge-V_xpypAiepz3/view?usp=sharing
