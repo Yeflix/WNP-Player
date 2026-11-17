@@ -2,419 +2,191 @@
 
 # YefriPlayer
 
-**Controlador multimedia para Windows — no es un reproductor: no reproduce audio, sino que muestra y controla lo que ya suena en tu navegador y en tus apps de escritorio.**
+**Controlador multimedia para Windows**
 
-Hecho con PyQt6 · Creado por **[YefriDev](https://github.com/Yeflix)** · Versión **1.5.6** · Licencia GPL-3.0
+No reproduce audio: muestra y controla lo que ya suena en tu navegador y en tus apps de escritorio,<br>
+con carátula, letras, visualizador de audio y teclas rápidas, desde una sola ventana.
 
-<img src="docs/img/visualizador.png" width="260" alt="Ventana completa con visualizador de audio"> <img src="docs/img/completa-cosmos.png" width="260" alt="Aspecto Cosmos">
+[![Descargar para Windows](https://img.shields.io/badge/Descargar-Windows%2010%20%2F%2011-2979ff?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/Yeflix/yefriplayer/releases/latest)
+
+[![Última versión](https://img.shields.io/github/v/release/Yeflix/yefriplayer?label=versi%C3%B3n&color=ff4757)](https://github.com/Yeflix/yefriplayer/releases/latest)
+[![Descargas](https://img.shields.io/github/downloads/Yeflix/yefriplayer/total?label=descargas&color=2979ff)](https://github.com/Yeflix/yefriplayer/releases)
+[![Licencia GPL-3.0](https://img.shields.io/github/license/Yeflix/yefriplayer?label=licencia)](LICENSE)
+![Windows 10/11 · 64 bits](https://img.shields.io/badge/Windows-10%20%2F%2011%20%C2%B7%2064%20bits-555)
+
+<img src="docs/img/visualizador.png" width="270" alt="Ventana completa con el visualizador de audio">&nbsp;&nbsp;<img src="docs/img/completa-cosmos.png" width="270" alt="Ventana completa con el aspecto Cosmos">
 
 </div>
 
-Este es el único documento del proyecto. Sirve a la vez como **presentación** (qué es y qué puede hacer), **mapa** (cómo está organizado) y **guía de trabajo** (qué hay que saber antes de tocar el código). Si vas a modificar algo, lee al menos las secciones 3, 4 y 7.
+---
 
 ## Índice
 
-1. [Qué es](#1-qué-es)
-2. [Qué puede hacer](#2-qué-puede-hacer)
-3. [Cómo funciona por dentro](#3-cómo-funciona-por-dentro)
-4. [Estructura del proyecto](#4-estructura-del-proyecto)
-5. [Datos, configuración y privacidad](#5-datos-configuración-y-privacidad)
-6. [Instalar, ejecutar, probar, compilar y crear el instalador](#6-instalar-ejecutar-probar-compilar-y-crear-el-instalador)
-7. [Puntos importantes al trabajar en la app](#7-puntos-importantes-al-trabajar-en-la-app)
-8. [Spicetify AutoFix](#8-spicetify-autofix)
-9. [Limitaciones conocidas](#9-limitaciones-conocidas)
-10. [Historial de versiones](#10-historial-de-versiones)
-11. [Créditos, aviso legal y licencia](#11-créditos-aviso-legal-y-licencia)
+- [¿Qué es?](#qué-es)
+- [Descargar e instalar](#descargar-e-instalar)
+- [Conectar la música del navegador](#conectar-la-música-del-navegador)
+- [Qué puede hacer](#qué-puede-hacer)
+- [Teclas rápidas](#teclas-rápidas)
+- [Preguntas frecuentes y problemas comunes](#preguntas-frecuentes-y-problemas-comunes)
+- [Privacidad](#privacidad)
+- [Para desarrolladores](#para-desarrolladores)
+- [Créditos, aviso legal y licencia](#créditos-aviso-legal-y-licencia)
 
----
+## ¿Qué es?
 
-## 1. Qué es
+YefriPlayer es un **controlador multimedia**. No sustituye a Spotify ni a YouTube: los acompaña. Lee lo que está sonando (título, artista, carátula, posición, volumen) y te deja manejarlo sin cambiar de ventana: reproducir y pausar, saltar canciones, moverte por la barra de progreso, cambiar el volumen, activar aleatorio o repetir.
 
-YefriPlayer **no reproduce audio**. Lee el estado de lo que ya suena en otro sitio (título, artista, carátula, posición, volumen, estado) y le manda órdenes (reproducir/pausar, siguiente, anterior, buscar posición, volumen, aleatorio, repetir). Sobre esa información construye una interfaz propia, con tres formas de ventana, letras, historial, estadísticas, "me gusta", scrobbling y un visualizador de audio.
+| Dónde suena tu música | Plataformas compatibles | Qué necesitas |
+|---|---|---|
+| **En el navegador** | YouTube, YouTube Music, Spotify Web, SoundCloud, Deezer, Apple Music, TIDAL y cualquier sitio compatible con WebNowPlaying | La extensión gratuita **WebNowPlaying** ([ver abajo](#conectar-la-música-del-navegador)) |
+| **En el escritorio** | Spotify, Apple Music, TIDAL, Deezer, Reproductor multimedia de Windows y las demás apps que aparecen en los controles multimedia de Windows | Nada: se detectan solas |
 
-| Fuente | Cómo llega la información |
-|---|---|
-| Sitios web: YouTube, YouTube Music, Spotify Web, SoundCloud, Deezer, Apple Music, TIDAL… | La extensión **WebNowPlaying** del navegador se conecta por WebSocket al servidor local de `pywnp` (puerto **1234** por defecto) |
-| Apps de escritorio de Windows (Spotify, etc.) | Las sesiones multimedia nativas de Windows (SMTC), leídas con `winsdk` a través de `pywnp` |
+## Descargar e instalar
 
-**Requisitos:** Windows 10/11 y **Python 3.10, 3.11 o 3.12** (`winsdk` no tiene versión para 3.13+; en Linux/macOS sirve cualquier 3.10+, pero sin apps de escritorio, teclas globales ni visualizador). Y la extensión WebNowPlaying en el navegador, con el *adaptador personalizado* apuntando a `localhost:1234`.
+1. Descarga **`YefriPlayer-<versión>-Setup.exe`** desde la [última versión](https://github.com/Yeflix/yefriplayer/releases/latest) (sección *Assets*).
+2. Ábrelo y sigue el asistente. Se instala **solo para tu usuario y sin pedir permisos de administrador**. Si prefieres instalarlo para todos los usuarios, el asistente te deja elegirlo.
+3. Al terminar se abre una **bienvenida de tres pasos** que te guía para conectar la música y comprueba en vivo que todo funciona.
 
-## 2. Qué puede hacer
+> [!NOTE]
+> El instalador todavía no tiene firma digital, así que la primera vez Windows SmartScreen puede mostrar «Windows protegió su PC». Pulsa **Más información → Ejecutar de todas formas**. Si quieres comprobar el archivo, cada versión publica su **SHA-256** junto al instalador.
 
-**Ventanas**
-- **Completa** (356 px de ancho, 320–460 con la rueda del ratón): carátula con colores de acento extraídos de la imagen, título con marquesina, barra de progreso con *seek*, controles, volumen, selector de reproductor y botón de historial reciente.
-- **Compacta**: barra flotante con un vinilo que gira mientras suena.
-- **Panel lateral**: pestaña anclada al borde de la pantalla (izquierdo o derecho) que se despliega por clic, por *hover* o ambos; estilo *tarjeta* (con estado «Sonando · Spotify», tiempos y un alto que se adapta a la pantalla) o *compacto*; ondas alrededor de la pestaña mientras suena.
-- **Sin carátula, escena 3D**: cuando no hay reproductor o lo que suena no trae carátula, en su lugar se ve la escena 3D de sonido de la bienvenida (también en la etiqueta del vinilo del modo compacto).
-- Icono en la **bandeja** con menú, la canción actual al pasar el ratón, notificaciones al cambiar de canción y **teclas globales** configurables. Si no hay ningún reproductor abierto, pulsar **play** abre Spotify o YouTube.
-- Opcional: **botón en la barra de tareas** con Anterior / Reproducir / Siguiente en su miniatura (Configuración → «Mostrar en la barra de tareas»; al reiniciar).
+**Requisitos:** Windows 10 u 11 de 64 bits. No necesitas instalar Python ni nada más.
 
-**Información y extras**
-- **Letras** sincronizadas (LRC) o en texto plano desde [lrclib.net](https://lrclib.net), con limpieza de títulos de YouTube.
-- **"Me gusta"** en Spotify y YouTube, con tus propias credenciales de desarrollador.
-- **Historial** (300 canciones, exportable a CSV), **estadísticas acumuladas sin límite** y **resumen semanal**, todo local.
-- **Scrobbling** a Last.fm o ListenBrainz (opcional): las pausas no cuentan y, sin conexión, los scrobbles esperan en una cola y se envían solos después.
-- **Volumen de las apps de escritorio** (Spotify, VLC…): se controla el volumen de la aplicación en Windows (el del Mezclador de volumen).
-- **Actualizaciones**: avisa una vez al día si hay una versión nueva en GitHub y, si se instaló con el instalador, se actualiza sola con un clic.
-- **Filtro de anuncios de Spotify**: no ensucian el historial ni las estadísticas; se registran aparte en un CSV.
-- **Visualizador de audio** opcional: espectro del sonido real, analizado solo en memoria. En Windows 11 (y en algunos Windows 10) escucha **solo al reproductor** (Spotify o el navegador), no los avisos, juegos o llamadas; si no se puede, todo el equipo.
-- **Dos aspectos** (predeterminado y *Cosmos*), accesibilidad (tamaño de letra, alto contraste, reducir movimiento) y escala automática según la resolución.
-- **Configuración con búsqueda y secciones**, e **inicio con Windows** (por-usuario, sin permisos de administrador).
-- Puente con el tema **Switch** de Spicetify (cambiar de modo del tema desde el reproductor) y **Spicetify AutoFix** (reaplica Spicetify tras una actualización de Spotify).
+YefriPlayer queda registrado como cualquier programa: aparece en **Inicio**, en **Configuración → Aplicaciones → Aplicaciones instaladas** (desde donde se desinstala) y se abre con **Win + R → `YefriPlayer`**. Vive en la bandeja del sistema, junto al reloj.
+
+**Actualizaciones:** una vez al día comprueba si hay una versión nueva aquí en GitHub. Si la hay, te avisa y se actualiza con un clic: descarga el instalador, verifica su SHA-256 y conserva tu configuración. Puedes desactivarlo en Configuración.
+
+## Conectar la música del navegador
+
+Las apps de escritorio se detectan solas. Para la música del navegador hace falta la extensión **WebNowPlaying**, que le cuenta a YefriPlayer qué está sonando en cada pestaña:
+
+1. Instálala desde la [Chrome Web Store](https://chromewebstore.google.com/search/WebNowPlaying) (sirve para Chrome, Edge, Brave y Opera) o desde [Firefox Add-ons](https://addons.mozilla.org/firefox/search/?q=WebNowPlaying).
+2. Haz clic en su icono para abrir sus opciones y pulsa **«Add custom adapter»** (Adaptador personalizado).
+3. Escribe el puerto **`1234`**, déjalo activado y guarda.
+
+Pon algo en YouTube y debería aparecer en YefriPlayer al instante. La bienvenida tiene un botón «Probar con YouTube» y un indicador que te dice si la extensión ya está conectada.
+
+## Qué puede hacer
+
+**Tres formas de verlo** (cámbialas con clic derecho en la ventana):
+- **Completa**: carátula grande con colores sacados de la propia imagen, letra, volumen y selector de reproductor.
+- **Compacta**: una barra flotante con un vinilo que gira mientras suena.
+- **Panel lateral**: una pestaña pegada al borde de la pantalla que se despliega con un clic o al pasar el ratón, en estilo *tarjeta* o *compacto*, con ondas que siguen la música.
+
+Cuando no suena nada o la canción no trae carátula, en su lugar aparece una pequeña **escena 3D animada** (un tocadiscos con ecualizador), que se detiene sola cuando no está a la vista.
+
+**Mientras escuchas:**
+- 🎤 **Letras** sincronizadas o en texto plano, desde [lrclib.net](https://lrclib.net).
+- 📊 **Visualizador de audio** con el espectro del sonido real. En Windows 11 escucha **solo al reproductor**, sin los avisos del sistema, juegos o llamadas.
+- 🔔 **Notificaciones** al cambiar de canción y la canción actual al pasar el ratón por el icono de la bandeja.
+- ⌨️ **Teclas rápidas globales**, que funcionan aunque estés en otra ventana.
+- 🔊 **Volumen** también para las apps de escritorio (el de su control en el Mezclador de volumen de Windows).
+- ▶️ Si no hay nada abierto, al pulsar play se abre Spotify o YouTube.
+
+**Tus datos, en tu equipo:**
+- 🕘 **Historial** de las últimas 300 canciones (exportable a CSV), **estadísticas** acumuladas y un **resumen semanal**.
+- 🎧 **Scrobbling** a Last.fm o ListenBrainz (opcional). Las pausas no cuentan y, sin conexión, los envíos esperan y salen solos después.
+- 💚 **«Me gusta»** en Spotify y YouTube, con tus propias credenciales de desarrollador.
+- 🚫 **Anuncios de Spotify** detectados: no ensucian tu historial ni tus estadísticas.
+
+**A tu gusto:**
+- Dos aspectos (predeterminado y **Cosmos**), tamaño de letra, alto contraste y «reducir movimiento».
+- Configuración con buscador, opción de iniciar con Windows y botones opcionales en la miniatura de la barra de tareas.
+- Para usuarios de **Spicetify**: un puente con el tema *Switch* y **Spicetify AutoFix**, que vuelve a aplicar Spicetify solo después de cada actualización de Spotify (se ofrece en el instalador si tienes Spicetify).
 
 <details>
-<summary>Más capturas</summary>
-
-<img src="docs/img/compacta.png" alt="Ventana compacta"><br>
-<img src="docs/img/bienvenida.png" width="300" alt="Asistente de bienvenida"><br>
-<img src="docs/img/panel-tarjeta.png" width="220" alt="Panel lateral, estilo tarjeta"> <img src="docs/img/panel-compacto.png" width="320" alt="Panel lateral, estilo compacto"><br>
+<summary><b>Más capturas</b></summary>
+<br>
+<img src="docs/img/compacta.png" alt="Ventana compacta con el vinilo"><br><br>
+<img src="docs/img/bienvenida.png" width="300" alt="Bienvenida"><br><br>
+<img src="docs/img/panel-tarjeta.png" width="220" alt="Panel lateral, estilo tarjeta">&nbsp;<img src="docs/img/panel-compacto.png" width="320" alt="Panel lateral, estilo compacto"><br><br>
 <img src="docs/img/panel-ondas.png" width="460" alt="Ondas de audio en el panel lateral">
 
 </details>
 
-## 3. Cómo funciona por dentro
+## Teclas rápidas
 
-```
-   Navegador                         Windows
- ┌───────────────┐              ┌──────────────────┐
- │ WebNowPlaying │              │ SMTC (Spotify,   │
- │  (extensión)  │              │ apps de escrit.) │
- └───────┬───────┘              └────────┬─────────┘
-         │ WebSocket 127.0.0.1:1234      │ winsdk
-         └──────────────┬────────────────┘
-                        ▼
-              ┌───────────────────┐
-              │ pywnp (+ parche)  │  servidor aiohttp en hilos propios
-              └─────────┬─────────┘
-                        │ WNPRedux.media_info  (se LEE, no se empuja)
-                        ▼
-              ┌───────────────────┐   QTimer 150 ms (700 ms con todo oculto)
-              │   WNPBackend      │──► PlayerState (dataclass inmutable)
-              └─────────┬─────────┘    señales: stateChanged, connectionChanged, serverError…
-                        ▼
-              ┌───────────────────┐
-              │  AppController    │  coordina ventanas, bandeja y servicios
-              └───┬───┬───┬───┬───┘
-        ┌─────────┘   │   │   └──────────┐
-        ▼             ▼   ▼              ▼
-   MainWindow    MiniWindow DockWindow   Servicios: historial · estadísticas · anuncios ·
-   (completa)    (compacta) (panel)      scrobbling · letras · carátulas · "me gusta" ·
-                                         teclas globales · tema de Spotify · bandeja
-```
+Vienen activadas y funcionan en todo Windows mientras YefriPlayer está abierto:
 
-**Ideas de diseño que se repiten por todo el código**
-
-- **El backend no empuja datos**: lee `pywnp` cada 150 ms y emite un `PlayerState` solo si cambió respecto al anterior.
-- **Una canción se registra tras 500 ms estable** (`TRACK_SETTLE_MS`): la extensión manda título, artista y duración en mensajes separados, y sin esa espera se guardaban entradas mezcladas en el historial y en Last.fm.
-- **Todo lo lento va a hilos de Python** (`workers.py`): carátulas, letras, scrobbling, "me gusta", OAuth. La interfaz solo recibe resultados por señales. No se usa `QThreadPool` (Nuitka avisa de que los hilos propios de Qt no funcionan bien con PyQt6).
-- **Red solo con la biblioteca estándar** (`urllib`), sin `requests`.
-- **Los estilos se construyen una vez** al crear cada widget: cambiar aspecto, tamaño de letra o contraste pide reiniciar.
-- **Las animaciones van por reloj real** (`time.monotonic`), se detienen cuando el widget no es visible o con "reducir movimiento", y lo que no cambia entre fotogramas se cachea en un `QPixmap`.
-- **Los controles responden al instante**: play/pausa, aleatorio, repetir, volumen y posición muestran lo pedido hasta que el reproductor lo confirma (y revierten si lo ignora).
-
-**Arranque (`main.py`)** — el orden importa:
-
-1. Lee argumentos (`--port`, `--autotest`, `--log`, `--quit`). Con `--autotest` ejecuta la autoprueba y sale; con `--quit` pide a la copia abierta que se cierre y sale.
-2. Carga la configuración y fija la **escala** (`screen_scale.configure`) **antes** de crear `QApplication` (`QT_SCALE_FACTOR` solo se lee al iniciar Qt).
-3. Aplica el **aspecto** (`theme.set_player_theme`) **antes** de importar `app_controller` (varios módulos leen `Palette` al importarse).
-4. Crea `QApplication` con `setQuitOnLastWindowClosed(False)` (la app vive en la bandeja), paleta oscura y QSS global.
-5. Instala el manejador global de errores y comprueba dependencias.
-6. `SingleInstanceGuard`: si ya hay otra instancia, le pide que se muestre y esta termina. Si es la primera, crea además el mutex `YefriPlayerAppMutex` (lo usa el instalador para saber que está abierta) y fija el AppUserModelID `YefriDev.YefriPlayer` (agrupa la barra de tareas con el acceso directo).
-7. Crea `AppController`, `controller.start()` y `app.exec()`.
-
-Cualquier excepción durante el arranque se guarda en `startup-error.log` y se muestra en un aviso de Windows (el `.exe` no tiene consola).
-
-## 4. Estructura del proyecto
-
-```
-main.py                 punto de entrada
-requirements.txt        dependencias (versiones verificadas)
-main.spec               receta de PyInstaller
-Construir-Instalador.bat  doble clic: compila y crea YefriPlayer-<versión>-Setup.exe (sección 6)
-installer/              YefriPlayer.iss (Inno Setup): el instalador que registra la app en Windows
-assets/                 yefriplayer.ico (ícono del .exe; se regenera con tools/generar_icono.py)
-docs/img/               capturas de este documento
-tools/                  compilador Nuitka, diagnósticos, userscript de YouTube
-SpicetifyAutoFix/       tarea programada que reaplica Spicetify (sección 8)
-tests/                  50 scripts de prueba + un arnés (harness_free.py) + pruebas del userscript (tests/userscript)
-```
-
-### Núcleo
-| Archivo | Responsabilidad |
+| Acción | Combinación |
 |---|---|
-| `main.py` | Punto de entrada, `--autotest`, `--log`, aviso de fallos de arranque |
-| `app_controller.py` | **Centro de la app**: crea y conecta backend, ventanas, bandeja y servicios; guarda la configuración cada 20 s y al salir |
-| `backend.py` | `WNPBackend` y `PlayerState`: sondeo de pywnp, control, cambio de puerto |
-| `pywnp_patch.py` | Corrige en memoria 12 errores de `pywnp` 2.0.2 (no modifica la librería instalada) |
-| `config.py` | `AppConfig` (dataclass, 55 campos) guardada como JSON de forma atómica y validada al cargar; no reescribe si nada cambió y no importa Qt |
-| `secret_store.py` | Cifra con DPAPI (Windows) los tokens y claves de `config.json` |
-| `startup_checks.py`, `single_instance.py` | Comprobación de dependencias; instancia única por socket local (órdenes `show` y `quit`) y mutex para el instalador |
-| `error_handling.py`, `diag.py`, `debug_log.py`, `selftest.py` | Manejo de errores, avisos silenciosos, modo depuración y autoprueba (ver sección 7) |
-| `version.py` | Nombre, versión, autor, `User-Agent` y `executable_path()` (**única fuente**) |
-| `workers.py` | Hilos de fondo con la biblioteca estándar |
+| Reproducir / pausar | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>Espacio</kbd> |
+| Siguiente | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>C</kbd> |
+| Anterior | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>X</kbd> |
 
-### Interfaz
-| Archivo | Responsabilidad |
-|---|---|
-| `main_window.py`, `mini_window.py`, `dock_window.py` | Las tres ventanas (completa, compacta, panel lateral) |
-| `widgets.py` | Componentes: `IconButton`, `SeekBar`, `VolumeBar`, `ElidedLabel`, `MarqueeLabel`, `CoverArt`, `VinylCover`, `LyricsPanel`, `PlayingIndicator`… |
-| `dialogs.py` | Configuración, puerto, Acerca de, errores, teclas, historial, estadísticas |
-| `splash.py` | Pantalla de carga: la escena 3D mientras se importa la interfaz (en un hilo) y su transformación en la ventana del modo actual |
-| `welcome_fx.py` | Efectos de la bienvenida: escena 3D de sonido (`SoundScene` = el dibujo, con cámara en perspectiva propia; `SoundStage` = widget de la bienvenida y la carga; `IdleScene` = la escena dentro de las carátulas sin imagen), puntos de progreso, cambio de paso como tarjeta que gira y confeti (QPainter, sin OpenGL) |
-| `likes_dialog.py`, `onboarding.py`, `weekly_recap.py` | Conectar cuentas, asistente de bienvenida, aviso semanal |
-| `theme.py`, `accent.py`, `cosmos_sky.py` | Paleta, aspectos, accesibilidad y QSS global; colores de acento desde la carátula; cielo animado de *Cosmos* |
-| `icons.py`, `app_icon.py` | Iconos dibujados por código (`QPainterPath`, lienzo 24×24) |
-| `screen_scale.py` | Escala de la interfaz según la altura útil de la pantalla |
-| `audio_levels.py` | Visualizador: captura (por aplicación o de todo el equipo) y análisis de espectro |
-| `process_loopback.py` | Captura del audio de un solo proceso (Application Loopback, COM con `ctypes`) |
-| `taskbar_buttons.py` | Botones en la miniatura de la barra de tareas (`ITaskbarList3`) |
-| `wincom.py` | Ayudas mínimas para COM de Windows con `ctypes` (sin `comtypes`) |
-| `autostart.py`, `hotkeys.py`, `player_launcher.py` | Inicio con Windows (`HKCU\…\Run`), teclas globales (`RegisterHotKey`), abrir Spotify/YouTube y otros |
+Se cambian o desactivan en **Configuración → Teclas**. Si otro programa ya usa alguna, YefriPlayer te avisa y la marca en rojo como «no funciona»; basta con elegir otra.
 
-### Funciones
-| Archivo | Responsabilidad |
-|---|---|
-| `lyrics.py` | Búsqueda en lrclib: limpieza de títulos, ranking de resultados, reintento, recarga |
-| `likes.py`, `oauth_pkce.py` | Clientes de Spotify/YouTube y `LikeManager`; OAuth 2.0 con PKCE |
-| `history.py`, `stats.py` | Historial local (300 entradas, exportar a CSV) y estadísticas (funciones puras) |
-| `stats_store.py` | Estadísticas acumuladas sin el límite de 300 |
-| `app_volume.py` | Volumen por aplicación de Windows para apps de escritorio (Core Audio) |
-| `updater.py` | Buscar versiones nuevas en GitHub, descargar y abrir el instalador |
-| `ad_filter.py`, `ad_log.py` | Detección de anuncios de Spotify y su registro aparte (CSV) |
-| `scrobbling.py` | Last.fm y ListenBrainz; tiempo escuchado sin pausas y cola sin conexión |
-| `cover_loader.py`, `links.py`, `youtube_api.py` | Descarga de carátulas (caché de 24); "ir a la canción" |
-| `spotify_theme.py` | Puente WebSocket (127.0.0.1:8977) con el tema *Switch* de Spicetify |
+## Preguntas frecuentes y problemas comunes
 
-### Herramientas (`tools/`)
-| Herramienta | Qué hace |
-|---|---|
-| `compilar_nuitka.py` | Compila con Nuitka y comprueba el resultado (sección 6) |
-| `construir_instalador.py` | Compila y crea el instalador con Inno Setup (sección 6) |
-| `diagnostico_sesiones.py` | Si no se detecta Spotify de escritorio: revisa las tres capas (Spotify → sesión de Windows → pywnp y parche) y emite un veredicto |
-| `diagnostico_anuncios.py` | Registra lo que WebNowPlaying reporta durante un anuncio (cerrar YefriPlayer antes: comparten puerto) |
-| `youtube_saltar_anuncios.user.js` | Userscript (Tampermonkey/Violentmonkey) que pulsa «Saltar anuncio» en YouTube; sin peticiones de red |
-| `generar_icono.py` | Regenera `assets/yefriplayer.ico` |
+<details>
+<summary><b>No aparece lo que suena en el navegador</b></summary>
 
-## 5. Datos, configuración y privacidad
+- Comprueba que la extensión WebNowPlaying está instalada y activada, y que su adaptador personalizado usa el mismo puerto que YefriPlayer (`1234` si no lo cambiaste).
+- Recarga la pestaña de la música después de configurar la extensión.
+- Si otro programa ocupa el puerto `1234`, YefriPlayer te avisa. Cambia el puerto en Configuración y pon el mismo en la extensión.
+</details>
 
-**Carpeta de datos** (`YefriPlayer`): Windows `%LOCALAPPDATA%\YefriPlayer` · macOS `~/Library/Application Support/YefriPlayer` · Linux `$XDG_CONFIG_HOME/YefriPlayer` (o `~/.config/YefriPlayer`). Nada de esto forma parte del repositorio.
+<details>
+<summary><b>Una tecla rápida no funciona</b></summary>
 
-| Archivo | Contenido |
-|---|---|
-| `config.json` | Configuración. Escritura atómica; los secretos van cifrados con DPAPI (`dpapi:<base64>`) |
-| `history.json` | Historial (máx. 300). Copias `.bak` / `.corrupt` si procede |
-| `estadisticas.json` | Estadísticas acumuladas (veces y tiempo por canción, por artista, totales). Se borra con «Borrar historial» |
-| `scrobbles_pendientes.json` | Scrobbles que no se pudieron enviar (sin conexión); desaparece cuando se envían. Máx. 2000; Last.fm no acepta los de más de 14 días |
-| `anuncios.csv` | Registro de anuncios de Spotify (los textos que empiezan por `=`, `+`, `-`, `@` se escapan) |
-| `ad_rules.json` | Reglas extra de anuncios, opcional: `{"artistas": [...], "titulos": [...]}` |
-| `error.log`, `crash.log` | Errores no controlados (rota a 512 KB) y fallos nativos (`faulthandler`) |
-| `startup-error.log`, `debug.log`, `autotest.txt` | Fallo de arranque; registro completo del modo depuración (rota a 2 MB × 3); informe de la autoprueba |
+Windows solo deja que **un** programa use cada combinación. Si otro ya la tiene (por ejemplo, el atajo de una extensión del navegador marcado como «Global» en `chrome://extensions/shortcuts`), YefriPlayer la marca como «no funciona» en Configuración → Teclas. Elige otra combinación o libera esa en el otro programa.
+</details>
 
-**Campos de `config.json`** (por grupos): conexión (`port`); ventanas (`last_mode`, `always_on_top`, `main_*`, `mini_*`, `dock_edge`, `dock_hide_mode`, `dock_style`, `window_opacity`, `lyrics_panel_*`); arranque (`start_with_windows`, `start_minimized`, `onboarding_completed`); comportamiento (`notifications_enabled`, `empty_play_action`, `hotkeys_*`, `audio_visualizer`, `bar_waves_enabled`); aspecto y accesibilidad (`player_theme`, `font_scale`, `ui_scale`, `high_contrast`); cuentas (`spotify_*`, `google_*`, `likes_enabled`, `youtube_api_key`); scrobbling (`scrobble_service`, `lastfm_*`, `listenbrainz_token`); tema de Spotify (`spotify_theme_*`); actualizaciones (`check_updates`, `last_update_check`, `skipped_update_version`); barra de tareas (`taskbar_button`); visualizador por aplicación (`visualizer_per_app`); y estado (`history_scroll_pos`, `stats_scroll_pos`, `last_weekly_recap_shown`). Al cargar, `AppConfig._sanitize` descarta valores de tipo incorrecto u opciones desconocidas (vuelven a su valor por defecto) y recorta rangos (puerto 1–65535, `font_scale` 0,8–1,6, `window_opacity` 0,5–1,0…).
+<details>
+<summary><b>Windows SmartScreen o el antivirus avisan</b></summary>
 
-**Secretos** (`secret_store.SECRET_FIELDS`): `spotify_refresh_token`, `google_client_secret`, `google_refresh_token`, `lastfm_api_secret`, `lastfm_session_key`, `listenbrainz_token`, `youtube_api_key`. DPAPI solo los descifra la misma cuenta de Windows en el mismo equipo; no es una caja fuerte (un programa con tu usuario puede pedírselos a Windows). Copiar `config.json` a otro equipo obliga a reconectar las cuentas. Un valor pegado a mano en texto plano se acepta y se cifra en el siguiente guardado. En macOS/Linux no hay cifrado (el archivo queda con permisos 600). La contraseña de Last.fm nunca se guarda.
+El instalador no tiene firma digital todavía. Descárgalo solo desde la [página de versiones](https://github.com/Yeflix/yefriplayer/releases) de este repositorio y, si quieres, compara su SHA-256 con el publicado. Spicetify AutoFix usa un pequeño lanzador que abre PowerShell en segundo plano, algo que a algunos antivirus no les gusta: si lo bloquea, AutoFix usa otro método automáticamente.
+</details>
 
-**Privacidad**
-- El servidor de la extensión (1234) y el puente del tema (8977) escuchan **solo en `127.0.0.1`**. El puente no comprueba el origen de la conexión (impacto bajo).
-- Lo único que sale del equipo, y solo si activas cada función: artista/título/álbum/duración a lrclib.net (letras); lo que escuchas a Last.fm/ListenBrainz (scrobbling); la autorización a Spotify/Google (me gusta, en el navegador: la app nunca ve tu contraseña); la clave de YouTube Data API (vídeo exacto); las URL de carátulas que entregue el reproductor; y, con «Buscar actualizaciones», una consulta anónima a la API de GitHub una vez al día (solo el `.exe`; desde el código, solo a mano).
-- Las credenciales de "me gusta" son **de tu propia app** de desarrollador (developer.spotify.com / Google Cloud); el proyecto no incluye ninguna.
-- Spotify en modo desarrollo: el dueño de la app necesita **Premium**, máximo 5 usuarios autorizados y una sola app por desarrollador; el *Redirect URI* es `http://127.0.0.1:8898/callback`. En Google, pantalla de consentimiento **publicada** (en modo prueba el permiso caduca a los 7 días). Confirma estos límites en la documentación de cada servicio: cambian.
-- El visualizador analiza el sonido solo en memoria: nada se graba ni se envía.
+<details>
+<summary><b>¿Cómo funciona «Me gusta»?</b></summary>
 
-## 6. Instalar, ejecutar, probar, compilar y crear el instalador
+Necesitas crear tu propia app de desarrollador en [Spotify](https://developer.spotify.com) o [Google Cloud](https://console.cloud.google.com) y pegar sus datos en Configuración → Cuentas. YefriPlayer no incluye credenciales propias y nunca ve tu contraseña: la autorización se hace en tu navegador. En YouTube Music no es posible identificar el vídeo, así que ahí no está disponible.
+</details>
 
-**Para usarlo** basta con el instalador `YefriPlayer-<versión>-Setup.exe`: doble clic y siguiente. Por defecto se instala **solo para tu usuario, sin pedir administrador** (en `%LOCALAPPDATA%\Programs\YefriPlayer`); el asistente permite elegir «para todos los usuarios» (Archivos de programa). Queda registrado como cualquier programa:
+<details>
+<summary><b>El programa no arranca o se comporta raro</b></summary>
 
-- En **Configuración → Aplicaciones → Aplicaciones instaladas** (y en «Programas y características»), con icono, versión, editor, enlaces y su desinstalador.
-- Acceso en **Inicio** (y en el escritorio si se marca), más una carpeta «YefriPlayer - herramientas» con el modo depuración, el estado y la reparación de Spicetify AutoFix y el desinstalador.
-- **Win+R → `YefriPlayer`** lo abre («App Paths»).
-- Si Spicetify está instalado, una casilla instala **Spicetify AutoFix** (sección 8) con tu usuario, aunque el programa se instale para todos.
-- Si YefriPlayer está abierto al actualizar o desinstalar, se le pide que se cierre de forma ordenada (guarda la configuración); una copia antigua que no entienda la orden se cierra a la fuerza tras preguntarte.
-- Al desinstalar se quitan la entrada de «Iniciar con Windows» y la tarea de AutoFix (si la instaló él), y **pregunta** si borrar tus datos (`%LOCALAPPDATA%\YefriPlayer`; por defecto «No»).
-- Instalación desatendida: `YefriPlayer-1.4.0-Setup.exe /VERYSILENT /SUPPRESSMSGBOXES /CURRENTUSER` (añade `/TASKS="autofix"` para AutoFix y `/ALLUSERS` para todos los usuarios).
+- En **Inicio → YefriPlayer - herramientas → YefriPlayer - autoprueba** se ejecuta una comprobación completa y se abre su informe.
+- Si falla al arrancar, se crea `startup-error.log` en `%LOCALAPPDATA%\YefriPlayer`.
+- Al [abrir un *issue*](https://github.com/Yeflix/yefriplayer/issues), adjunta ese informe y `error.log` de la misma carpeta.
+</details>
 
-**Desde el código fuente:**
+<details>
+<summary><b>¿Dónde guarda mis datos? ¿Cómo lo desinstalo?</b></summary>
+
+Configuración, historial y estadísticas están en `%LOCALAPPDATA%\YefriPlayer`. Se desinstala desde **Configuración → Aplicaciones**, y el desinstalador te pregunta si quieres borrar también esos datos (por defecto se conservan).
+</details>
+
+## Privacidad
+
+- Todo funciona en tu equipo. La conexión con la extensión solo escucha en `127.0.0.1`.
+- Solo sale información si activas la función correspondiente: título y artista a lrclib.net (letras), lo que escuchas a Last.fm o ListenBrainz (scrobbling), la autorización de Spotify o Google («Me gusta») y una consulta anónima diaria a GitHub (actualizaciones).
+- Tokens y claves se guardan **cifrados** con la protección de datos de Windows (DPAPI).
+- El visualizador analiza el sonido solo en memoria: no graba ni envía nada.
+
+## Para desarrolladores
+
+Hecho en **Python + PyQt6**, sobre [pywnp](https://pypi.org/project/pywnp/) y las sesiones multimedia de Windows. Para ejecutarlo desde el código necesitas **Python 3.10, 3.11 o 3.12** (`winsdk` no existe para 3.13+):
 
 ```bash
 git clone https://github.com/Yeflix/yefriplayer.git
 cd yefriplayer
 pip install -r requirements.txt
-python main.py                 # usa el puerto de la última sesión (por defecto 1234)
-python main.py --port 5678     # fija otro puerto
+python main.py
 ```
 
-La primera vez (y tras instalar con el instalador) aparece una bienvenida corta de 3 pasos con una escena 3D de sonido (vinilo girando, ecualizador en anillo, ondas y notas): qué es, cómo conectar la música (la extensión WebNowPlaying en tres pasos, con un indicador que comprueba EN VIVO si está conectada y si ya llega lo que suena, y un botón «Probar con YouTube») y las teclas rápidas con «Iniciar con Windows». Lo demás queda con los valores recomendados; «Omitir» acepta lo mismo. Para verlo otra vez: `python main.py --bienvenida` o clic derecho en la ventana → «Ver bienvenida de nuevo...».
-
-**Valores predeterminados** (instalación nueva o `config.json` nuevo): iniciar con Windows **sí**; siempre visible **no**; iniciar minimizado **no** (y aunque se active, solo aplica cuando arranca con Windows: abrirlo a mano siempre muestra la ventana); notificar la canción **sí**; buscar actualizaciones **sí**; barra de tareas **no**; visualizador de audio **sí**, con «solo el audio del reproductor» **sí**. **Teclas rápidas globales activas:** Reproducir/pausar `Ctrl+Shift+Espacio`, Siguiente `Ctrl+Shift+C`, Anterior `Ctrl+Shift+X` (mientras YefriPlayer está abierto esas combinaciones son suyas en todo el sistema: `Ctrl+Shift+C` es «inspeccionar elemento» en los navegadores; se cambian en Configuración → Teclas).
-
-**Pruebas.** Son scripts independientes (no usan `pytest`; cada uno termina con `sys.exit`) y se ejecutan sin pantalla:
-
-```bash
-QT_QPA_PLATFORM=offscreen python tests/test_ads.py
-# todos:
-for t in tests/test_*.py; do QT_QPA_PLATFORM=offscreen python $t || echo "FALLA $t"; done
-```
-
-(En PowerShell: `$env:QT_QPA_PLATFORM="offscreen"` antes de ejecutarlas.) El userscript tiene sus propias pruebas con jsdom: `cd tests/userscript && npm install && node test_userscript.js`.
-
-**Compilar con Nuitka (recomendado)**
-
-```bash
-pip install nuitka ordered-set zstandard
-python tools/compilar_nuitka.py            # carpeta dist-nuitka/YefriPlayer/
-python tools/compilar_nuitka.py --dry-run  # solo muestra el comando
-```
-
-Necesita un compilador de C: en Windows, *Build Tools for Visual Studio* (carga «Desarrollo para el escritorio con C++») o `--mingw --asumir-si`. La primera compilación tarda; las siguientes usan caché. Opciones: `--onefile`, `--console`, `--depurar`, `--lto`, `--msvc`, `--winsdk-completo`, `--limpiar`, `--extra=OPCION`, `--sin-autotest`. **Al terminar ejecuta solo `YefriPlayer.exe --autotest`** y muestra lo que falte (Qt, aiohttp, pywnp, winsdk con una llamada real a Windows, numpy, PyAudioWPatch, DPAPI, carpeta de datos). Para repartirlo, comprime la carpeta completa en un `.zip`.
-
-**Compilar con PyInstaller**: `pip install pyinstaller && pyinstaller main.spec` → carpeta `dist/YefriPlayer/` (modo *onedir*: arranca al instante y da menos falsos positivos de antivirus; sin UPX).
-
-**Crear el instalador** (Windows):
-
-```bash
-winget install --id JRSoftware.InnoSetup -e    # una sola vez (Inno Setup 6.3 o posterior)
-python tools/construir_instalador.py           # compila con Nuitka + autoprueba + instalador
-python tools/construir_instalador.py --pyinstaller   # o con PyInstaller
-python tools/construir_instalador.py --sin-compilar  # reutiliza lo ya compilado
-python tools/construir_instalador.py --nuitka=--mingw --nuitka=--asumir-si   # opciones para Nuitka
-```
-
-O doble clic en `Construir-Instalador.bat` (usa `.venv` si existe, si no `py -3.12`). Resultado: `dist-installer/YefriPlayer-<versión>-Setup.exe` y su SHA-256. La versión sale de `version.py`; si la compilación o su `--autotest` fallan, no se crea el instalador. El script de Inno Setup es `installer/YefriPlayer.iss`: **no cambies su `AppId`** (es lo que permite actualizar y desinstalar las versiones anteriores). Sin firma digital, Windows SmartScreen avisará la primera vez («Más información → Ejecutar de todas formas»).
-
-**Publicar una versión** (para que las copias instaladas se actualicen solas): crea en GitHub una *release* con la etiqueta `v<versión>` (la de `version.py`) y adjunta el archivo `YefriPlayer-<versión>-Setup.exe` tal cual sale de `dist-installer/`. El programa lee la última *release* publicada (no borradores ni *prereleases*), compara versiones y descarga ese archivo; GitHub publica su SHA-256 y se comprueba antes de ejecutarlo.
-
-**Ejecutar la autoprueba desde PowerShell.** PowerShell no busca programas en la carpeta actual ni en la de instalación: hay que dar la ruta (y `&` delante si va entre comillas). Con el programa instalado:
-
-```powershell
-& "$env:LOCALAPPDATA\Programs\YefriPlayer\YefriPlayer.exe" --autotest --mostrar
-# instalado «para todos»:  & "$env:ProgramFiles\YefriPlayer\YefriPlayer.exe" --autotest --mostrar
-# recién compilado:        .\dist-nuitka\YefriPlayer\YefriPlayer.exe --autotest --mostrar
-# desde el código:         python main.py --autotest     (aquí sí se ve en la terminal)
-Get-Content "$env:LOCALAPPDATA\YefriPlayer\autotest.txt"   # el informe, si prefieres verlo en la terminal
-```
-
-**Si el `.exe` falla o se porta raro**
-
-| Herramienta | Para qué |
+| Documento | Contenido |
 |---|---|
-| `YefriPlayer.exe --autotest [archivo]` | Comprueba que el ejecutable trae todo; escribe `autotest.txt` (en la carpeta de datos). Añade `--mostrar` para que abra el informe al terminar: el `.exe` no tiene consola y en la terminal no se ve nada. También: Inicio → «YefriPlayer - herramientas» → «YefriPlayer - autoprueba» |
-| `startup-error.log` | Se crea solo si algo falla al arrancar (además sale un aviso de Windows) |
-| `YefriPlayer.exe --quit` | Cierra de forma ordenada la copia abierta (la usa el instalador) |
-| `YefriPlayer.exe --log [archivo]` (o `YEFRIPLAYER_DEBUG=1`, o un archivo `depurar.flag` junto al `.exe`) | Abre una terminal y guarda TODO en `debug.log`: lo que imprime el programa, avisos de Qt, `logging`, excepciones (también de hilos) y lo que va a `error.log` |
-| `python tools/compilar_nuitka.py --depurar` | Compila con terminal visible y deja `depurar.flag` |
+| [`docs/DESARROLLO.md`](docs/DESARROLLO.md) | Cómo funciona por dentro, estructura, pruebas, compilar con Nuitka o PyInstaller, crear el instalador y las reglas del proyecto |
+| [`docs/PUBLICAR.md`](docs/PUBLICAR.md) | Cómo sacar una versión en GitHub para que las copias instaladas se actualicen solas |
+| [`CHANGELOG.md`](CHANGELOG.md) | Historial de versiones |
 
-**Actualizar desde una versión anterior:** con el instalador, simplemente ejecuta el nuevo (cierra la copia abierta, conserva carpeta, opciones y datos). Desde un `.zip` o el código: cierra YefriPlayer (bandeja → Salir), usa la carpeta nueva (o `git pull` + `pip install -r requirements.txt --upgrade`) y ábrelo; tu configuración vive fuera de la carpeta del programa. Quien venga de *WNP Player* (1.0/1.1): al primer arranque se **copian** los datos de `%LOCALAPPDATA%\WNPPlayer` a `YefriPlayer` y se elimina la entrada vieja de «Iniciar con Windows».
+Los errores y las sugerencias van en [Issues](https://github.com/Yeflix/yefriplayer/issues). Si mandas cambios, ejecuta antes las pruebas (`tests/`) y la autoprueba (`python main.py --autotest`).
 
-## 7. Puntos importantes al trabajar en la app
+## Créditos, aviso legal y licencia
 
-Son las reglas que más errores evitan. Casi todas nacieron de un fallo real.
-
-### Qué no se puede probar aquí
-- Todo lo que depende de **Windows real** (SMTC, `RegisterHotKey`, DPAPI, Programador de tareas, el `.exe`) y de **servicios externos** (Spotify, YouTube, Last.fm) se probó solo con servidores y funciones simulados. Tras tocar eso, comprueba en Windows: `--autotest`, abrir el reproductor con música sonando, y mirar `error.log`.
-- Las pruebas corren en Qt *offscreen*, sin Segoe UI: usan una fuente más ancha. Lo que cabe allí, cabe en Windows; al revés puede no ocurrir. `test_settings_dialog.py` termina a veces con un cierre brusco de Qt *offscreen* (≈ 2 de 30 ejecuciones, también con el código original); sus comprobaciones dan siempre ok.
-
-### Estructura y datos
-- **`PlayerState` es inmutable y el backend no empuja.** Para exponer un dato nuevo: campo en `PlayerState`, lectura en `backend.py`, uso en la ventana. No guardes estado del reproductor en las ventanas.
-- **Hilos:** nada lento en el hilo de la interfaz. Usa `workers.py` y devuelve resultados por señal. No uses `QThreadPool`.
-- **Orden de arranque** (sección 3): escala antes de `QApplication`, aspecto antes de importar `app_controller`. Reordenarlo rompe en silencio.
-- **Añadir un ajuste:** campo en `AppConfig` → validación en `_sanitize` (tipo y rango) → control en `SettingsDialog` (si abre sección, registra su ancla en `_nav_anchors`) → guardado en `AppController` → una prueba. Si es un secreto, añádelo a `secret_store.SECRET_FIELDS`.
-- **`version.py` es la única fuente** de nombre, versión y autor (la leen el `User-Agent`, el diálogo Acerca de, el `.exe`, el script de Nuitka y el instalador). Sube la versión ahí.
-- **Instalador y código hablan de lo mismo:** el mutex (`single_instance.APP_MUTEX_NAME`), el canal de instancia única (`_SERVER_NAME`), el AppUserModelID (`main.APP_USER_MODEL_ID`) y la entrada de inicio (`autostart.VALUE_NAME`) están repetidos en `installer/YefriPlayer.iss`. `tests/test_instalador.py` falla si dejan de coincidir; si renombras uno, cambia el otro.
-- **`config.py` no debe importar PyQt6** (`DEFAULT_PORT` vive ahí y `backend.py` lo reexporta): así la configuración se lee antes de Qt y se prueba sin él.
-- **Compatibilidad con «WNP Player»:** las constantes de migración en `config.py` y `autostart.py` (carpeta `WNPPlayer`, entrada del registro) son **intencionales**; no las borres.
-- **`pywnp` está fijado** (`>=2.0.2,<2.1`) porque `pywnp_patch.py` está escrito contra esa versión. Si `apply()` falla, avisa por stderr y la app sigue; si subes pywnp, revisa los 12 parches.
-
-### Interfaz
-- **Los estilos se construyen una vez** (QSS y fuentes al crear el widget): un cambio de aspecto, escala o contraste pide reiniciar; no intentes aplicarlo en caliente.
-- **Todo estado necesita estilo:** `:hover`, `:focus`, `:checked` y **`:disabled`** (un botón deshabilitado sin regla se ve activo). `:disabled` va **después** de `:hover` en el QSS.
-- **Contraste:** el texto debe llegar a 4,5:1 contra su fondo; usa `theme.ensure_contrast` con colores de acento dinámicos (la carátula puede dar un azul oscuro de 1,8:1). Los enlaces usan el acento principal aclarado.
-- **Nombres accesibles:** un control sin texto (botón de icono, deslizador) necesita tooltip o `accessibleName`; `IconButton` copia el tooltip y `widgets.sync_accessible_names` cubre el resto.
-- **Textos largos:** `ElidedLabel` recorta con «…» (o elige entre variantes con `set_variants`), `MarqueeLabel` se desplaza (o se reparte en líneas con movimiento reducido). No pongas `setFixedWidth` a un texto que puede cambiar.
-- **Escalas:** prueba a 0,88, 1,0 y 1,3, ancho mínimo (320) y movimiento reducido.
-
-### Animaciones y rendimiento
-- **Un temporizador de animación debe detenerse al ocultarse Y no arrancar mientras el widget esté oculto** (`isVisible()`). Si no, sigue despertando al procesador con el programa en la bandeja (pasó con `PlayingIndicator`).
-- **Lo que no cambia entre fotogramas se dibuja una vez** en un `QPixmap` (con `devicePixelRatio`) y el fotograma solo lo copia o lo gira: marquesina, vinilo, carátula, ondas del dock. La **clave de la caché** debe incluir todo lo que afecta al dibujo (tamaño, colores, imagen, densidad) y se descarta sola al cambiar; durante un fundido se dibuja sin caché. Hay pruebas que comparan «cacheado = dibujado directo».
-- **Dos temporizadores sobre la misma zona** provocan dos repintados: alinéalos (mismo intervalo, arranque a la vez) para que Qt los junte. Un hijo no opaco hace que el padre se repinte cada vez que el hijo se actualiza.
-- **Medir antes de optimizar:** para saber qué temporizador cuesta más, páralos de uno en uno y mira cuánto baja la CPU (ablación), o mide el tiempo de cada `paintEvent`. La intuición suele equivocarse.
-- Sondeo del backend: 150 ms con alguna ventana visible, 700 ms con todo oculto (`set_poll_interval`).
-
-### PyQt6 + Nuitka (el `.exe`)
-- **Imports estáticos:** Nuitka solo incluye lo que ve importado. `audio_levels` importa `numpy` y `pyaudiowpatch` de forma estática a propósito; con `importlib.import_module` el `.exe` diría «falta numpy». No fuerces `--include-package=numpy` (arrastra sus pruebas y pytest) ni excluyas `unittest`/`test`/`pydoc`.
-- **`sys.executable` no es fiable** en el binario compilado (apunta a un archivo inexistente, y con `--onefile` a una copia temporal): usa `version.executable_path()` (`sys.argv[0]`). Nuitka no marca `sys.frozen`: usa `version.is_frozen()`.
-- **Señales hacia objetos de vida larga:** PyQt desconecta solo los métodos de un `QObject` destruido, pero con Nuitka no reconoce al receptor y la señal llega a un widget borrado (`wrapped C/C++ object … has been deleted`). Si un diálogo se conecta a algo que vive más que él (como el puente del tema), desconéctalo explícitamente al cerrarse (`SettingsDialog._disconnect_theme_bridge`) y protege los manejadores con `sip.isdeleted`.
-- **`winsdk`** es un paquete sin `__init__` con un único `_winrt.pyd`; la lista mínima de módulos del script basta (la autoprueba hace una llamada real). Si falta alguno: `--winsdk-completo`.
-- El `.exe` va **sin consola**: `sys.stdout`/`sys.stderr` son `None`. Nunca escribas en ellos sin comprobar (el manejador de errores falló dentro de sí mismo por eso).
-
-### Errores y registro
-- **No te tragues errores con `try/except: pass`.** Usa `diag.soft("contexto")` (anota UNA línea en `error.log` y sigue) o `contextlib.suppress(...)` si el fallo es esperado. Cada contexto se anota una sola vez por sesión.
-- `error_handling.py` muestra un diálogo amable (uno a la vez; el mismo error no se repite en 60 s) y escribe siempre en `error.log`. `debug_log.py` lo recoge todo cuando se activa el modo depuración.
-- Los secretos nunca deben llegar a un registro ni a un mensaje de error.
-
-### Pruebas
-- Un script por tema, con la función `check(nombre, condición)` y `sys.exit(1)` si algo falla. Usa una carpeta de datos temporal (`XDG_CONFIG_HOME` y `LOCALAPPDATA`) para no tocar la tuya.
-- **No simules dibujo con «parece bien»:** compara imágenes (diferencia media) entre lo cacheado y lo directo, o mide temporizadores activos con la ventana oculta.
-- Antes de entregar: todas las pruebas, `ruff check --select F,E9,B,PLE,PLW,S110,S112,SIM105` sin avisos, `python main.py --autotest`, y compilar y ejecutar `--autotest` del `.exe`.
-
-### Estilo del código
-- Comentarios y textos de interfaz en **español**; los comentarios explican el **porqué** (qué falló antes), no el qué.
-- Los `global` que quedan son estado de módulo a propósito (lo leen otros módulos o las pruebas) y llevan `# noqa: PLW0603` con la razón.
-- Archivos grandes (`widgets.py`, `main_window.py`, `dialogs.py`, `dock_window.py`): se decidió no dividirlos por ahora; si lo haces, mueve primero las pruebas que importan sus nombres.
-
-## 8. Spicetify AutoFix
-
-Carpeta `SpicetifyAutoFix/`. Es **independiente del reproductor** y solo para Windows. Resuelve un problema concreto: cada vez que Spotify se actualiza, **Spicetify deja de estar aplicado** y hay que ejecutar `spicetify backup apply` a mano. Esta tarea programada lo hace sola, **sin ventanas**.
-
-**Instalar:** marca la casilla en el instalador de YefriPlayer, o doble clic en `Instalar.bat` con tu usuario normal (**no** «como administrador»; si lo haces, avisa); debe terminar con `Listo: la tarea funciona.` Si ya lo tenías, vuelve a ejecutarlo para actualizarlo. Utilidades: `Estado.bat` (método de lanzamiento), `Comprobar-ahora.bat`, `Desinstalar.bat`. Datos en `%LOCALAPPDATA%\SpicetifyAutoFix` (`estado.json`, `autofix.log`, `ultima-comprobacion.txt`).
-
-**Qué detecta** (`Spicetify-AutoFix.ps1`): *caso A*, la versión de `Spotify.exe` difiere de la guardada en `[Backup] version` de `config-xpui.ini` (Spotify se actualizó); *caso B*, las versiones coinciden pero los `.js` de `xpui` ya no contienen «Spicetify» (perdió el parche; se guarda una huella de tamaño y fecha para no releer decenas de MB). **Antes de actuar** espera a que `Spotify.exe` lleve 90 s estable y no haya un instalador en marcha, respeta un enfriamiento de 30 min entre intentos (24 h para el caso B) y usa un mutex. **Acción:** `spicetify backup apply`; si falla, `spicetify restore` para que Spotify no quede en blanco; tras 3 fallos con la misma versión se pausa y reintenta cada 6 h. `backup apply` **abre Spotify al terminar**: si estaba cerrado se añade `-n` (`--no-restart`) para que no se reabra solo justo después de cerrarlo; si estaba abierto con ventana, se deja que lo reinicie. Las preguntas de Spicetify (`[Y/n]`) se contestan solas por la entrada estándar (no se usa `-q` porque silenciaría el registro).
-
-**Cómo se lanza sin ventanas:** `powershell.exe -WindowStyle Hidden` crea la consola y la oculta *después* (parpadea y roba el foco), así que el instalador prueba, en orden, y usa el primero que funcione: (1) `AutoFixSilencioso.exe`, un lanzador sin consola que compila `Lanzador.cs` en tu equipo y queda como **vigilante** (mira cada 4 s si existe el proceso Spotify); (2) `conhost.exe --headless powershell.exe`; (3) `powershell.exe -WindowStyle Hidden`.
-
-| Evento | Qué hace el vigilante |
-|---|---|
-| Inicias sesión | Una comprobación |
-| Spotify se cierra | Aplica en silencio (nada que reiniciar); segundo intento a los 2 min |
-| Spotify se abre con ventana | Comprueba a los 20 s, 110 s y 6 min; si falta el parche lo aplica (Spotify se reinicia una vez) |
-| Spotify se abre en la bandeja | No lo reinicia delante de ti; espera a que lo cierres o a que abras su ventana |
-| Abres la ventana de Spotify que estaba en la bandeja | Comprueba a los 5 s (como mucho una vez cada 10 min) |
-| Spotify se actualiza y se reinicia solo (entre dos sondeos) | Lo nota por la hora de inicio del proceso y actúa como si se hubiera abierto |
-| Cada hora sin eventos | Comprobación de seguridad que **nunca** reinicia Spotify (si está abierto, espera a que se cierre) |
-
-Parámetros del instalador: `-EsperarSpotifyCerrado`, `-CadaMinutos` (métodos 2 y 3), `-SinLanzador`, `-SinConhost`. **Avisos:** un `.exe` que arranca PowerShell oculto puede alarmar a un antivirus (si lo bloquea, cae al método 2); si Spotify se minimiza a la bandeja al cerrar no hay evento de cierre (desde 1.4.0 se cubre al volver a abrir su ventana o, sin reinicio, con la comprobación horaria). Si AutoFix se instaló desde el instalador «para todos los usuarios», al desinstalar se quita la tarea pero puede quedar `%LOCALAPPDATA%\SpicetifyAutoFix` de tu usuario (bórralo con `Desinstalar.bat` antes, si quieres). La parte de Windows (`Add-Type`, Programador de tareas, detección de ventana) no se pudo probar fuera de Windows.
-
-## 9. Limitaciones conocidas
-
-- **"Me gusta" en YouTube Music:** no se puede identificar el vídeo (su carátula no incluye el id). En YouTube depende de que la extensión entregue la miniatura con el id.
-- **Spotify «sin canción cargada»** se interpreta como «sin reproductor»: pulsar play vuelve a lanzar Spotify.
-- **Estadísticas aproximadas**: «veces escuchada» cuenta entradas (un bucle cuenta una vez) y el tiempo suma la duración completa de cada canción iniciada. Ya no se limitan a las últimas 300: se acumulan desde la 1.5 (sembradas con el historial que hubiera).
-- **Scrobble:** se envía al llevar escuchada (sin pausas) la mitad de la duración o 4 min, y solo si dura más de 30 s.
-- **Volumen** de apps de escritorio: es el volumen de la aplicación en Windows (Mezclador de volumen), no la barra interna de Spotify; solo si la app tiene una sesión de audio abierta.
-- **Visualizador por aplicación:** con fuentes del navegador escucha el navegador entero (todas sus pestañas). Requiere Windows 10 build 20348+ (oficialmente) o lo que permita tu Windows; si falla, usa todo el equipo y no lo reintenta con ese reproductor durante 10 min. Abrir la captura puede tardar hasta ~3 s la primera vez.
-- **Botones de la barra de tareas:** solo con la ventana completa (la compacta y el panel no tienen botón en la barra).
-- **Actualización con un clic:** solo si la versión en GitHub publica el archivo `YefriPlayer-<versión>-Setup.exe`; si no, se abre la página de la versión.
-- **Windows:** reiniciar el servidor de pywnp puede dejar dos hilos de posición hasta el siguiente evento (la barra avanza al doble un momento); `HttpServer.stop()` bloquea la interfaz ~0,5 s.
-- **La letra puede fallar** si lrclib no tiene la canción; el botón de recarga permite reintentar.
-
-## 10. Historial de versiones
-
-- **1.5.6** (2026-11) — **Carátulas sin imagen**: la nota musical se sustituye por la escena 3D de sonido (ventana completa, panel lateral y etiqueta del vinilo del modo compacto). Se pinta dentro de la propia carátula (respeta sus esquinas y su borde), a 25 fps, con menos detalle en huecos chicos, y solo mientras se ve: se para con carátula, ventana oculta o minimizada, panel lateral recogido o «reducir movimiento». **Panel lateral rediseñado**: tarjeta más ancha con estado arriba («Sonando · Spotify» / «En pausa» / «En espera»), título y artista con jerarquía (antes iguales), tiempos bajo la barra, controles más grandes y un resplandor del color de acento cuando no hay carátula; su alto se adapta a la pantalla (la carátula encoge en pantallas bajas). La pestaña separa sus botones en tres grupos. El compacto usa una carátula de 76 px, el botón de subir pasa a la fila de controles y la barra de progreso lleva los tiempos a los lados (antes pegada al borde). Pruebas nuevas: `test_panel_lateral_escena.py`.
-- **1.5.5** (2026-11) — **Pantalla de carga** con la escena 3D de sonido mientras arranca: los módulos de la interfaz se importan en un hilo para que la escena siga moviéndose, y al terminar la tarjeta **se transforma** (se mueve, se redimensiona y se funde) en la ventana del modo que uses; luego se destruye, sin dejar temporizadores. No aparece al arrancar minimizado con Windows; `--sin-carga` la desactiva. **Teclas rápidas:** si Windows no deja activar una combinación (otro programa ya la usa, error 1409) ya no falla en silencio: aviso en la bandeja y en Configuración → Teclas la combinación sale en rojo con «no funciona» y el motivo.
-- **1.5.4** (2026-11) — **Bienvenida:** el paso «Conecta tu música» explica la extensión WebNowPlaying en tres pasos y **comprueba en vivo** si funciona (esperando → extensión conectada → «¡Funciona! Sonando…», o la app de escritorio detectada; avisa si el puerto está ocupado); botón «Probar con YouTube» y la escena celebra cuando llega la primera canción. **Configuración:** las tarjetas de sección cubren hasta el último ajuste de cada sección (antes los últimos campos —el estado del tema de Spotify, el desplegable de scrobbling, la clave de YouTube— quedaban medio fuera) y hay separación real entre tarjetas.
-- **1.5.3** (2026-11) — **Bienvenida simplificada**: 3 pasos cortos (qué es, conectar, listo) sobre una **escena 3D de sonido** (vinilo con brazo girando en su plato, anillo de barras de ecualizador que late a 120 BPM, ondas por el suelo y notas que suben; la cámara oscila alrededor) que se encaja sola al espacio disponible. **Responsive**: la bienvenida y Configuración calculan su tamaño con la pantalla (caben en portátiles al 125–150 %); en Configuración las casillas parten su texto en varias líneas, los desplegables pueden estrecharse sin cortar su lista, los ajustes del panel lateral van apilados y la barra lateral se estrecha/compacta en ventanas pequeñas. Pruebas nuevas: `test_responsive.py`.
-- **1.5.2** (2026-11) — **Bienvenida animada en 3D**: fondo vivo (orbes de color y suelo de rejilla en perspectiva que avanza), icono que gira en 3D en el riel y una vuelta completa en el paso final, cambio de paso como una tarjeta que gira con profundidad y sombra, píldora que se desliza en la lista de pasos, vistas previas de los modos que se inclinan hacia el ratón, teclas rápidas que se «pulsan» solas y confeti en 3D al terminar. Sin OpenGL (QPainter con perspectiva), con un solo reloj para el fondo y los iconos, parado al ocultarse; con «reducir movimiento» de Windows todo queda quieto.
-- **1.5.1** (2026-11) — **Bienvenida remasterizada** (riel de pasos, 6 pasos: plataformas, modo, extensión, teclas rápidas, preferencias recomendadas, resumen); se muestra tras una instalación nueva (`--bienvenida`) y una vez a quien ya la había visto (`WELCOME_REVISION`). **Configuración remasterizada**: barra lateral con búsqueda y secciones, una tarjeta por sección, explicación debajo de cada opción, sección «Teclas» con las combinaciones actuales y explicación detallada de «Solo el audio del reproductor». **Predeterminados** nuevos (visualizador activo, teclas `Ctrl+Shift+Espacio/C/X` activas). **«Iniciar minimizado»** solo al arrancar con Windows (`--inicio-windows`); abrirlo a mano siempre muestra la ventana. Descripción en todo el programa: **controlador multimedia** y plataformas compatibles. `--autotest --mostrar` y acceso directo «autoprueba».
-- **1.5.0** (2026-11) — **Actualizaciones** desde GitHub (aviso diario, «Omitir esta versión», descarga verificada por SHA-256 y apertura del instalador). **Scrobbling** con tiempo realmente escuchado (las pausas no cuentan) y **cola sin conexión** persistente. **Canción actual** en el icono de la bandeja. **Estadísticas acumuladas** sin el límite de 300 y **exportar el historial a CSV**; «Borrar historial» pide confirmación. **Volumen** de las apps de escritorio (por aplicación). **Botones en la miniatura** de la barra de tareas (opcional). **Visualizador solo del reproductor** (Application Loopback) con respaldo automático. La autoprueba (`--autotest`) hace llamadas reales a Windows para estas funciones.
-- **1.4.0** (2026-11) — **Instalador de Windows** (Inno Setup): por usuario sin administrador o para todos, registro en Aplicaciones instaladas, accesos en Inicio/escritorio, App Paths, cierre ordenado de la copia abierta (`--quit`, mutex), Spicetify AutoFix opcional, desinstalación que limpia el inicio con Windows y pregunta por los datos; `tools/construir_instalador.py` y `Construir-Instalador.bat`. **Spicetify AutoFix:** ya no reabre Spotify al aplicar con Spotify cerrado (`-n`), contesta solo a las preguntas de Spicetify (antes la corrida oculta podía quedarse esperando), detecta que Spotify se reinició al actualizarse, actúa al abrir la ventana desde la bandeja y hace una comprobación horaria sin reiniciar; aviso si se instala como administrador. **Robustez y rendimiento:** `config.json` no se reescribe cada 20 s si nada cambió y reintenta si Windows lo tiene bloqueado; un fallo persistente al leer el estado ya no se emite en cada sondeo (~7/s); `config.py` sin dependencia de Qt; AppUserModelID propio en la barra de tareas.
-- **1.3.1** (2026-11) — **Empaquetado:** compilación con Nuitka revisada, autoprueba `--autotest`, aviso de errores de arranque, modo depuración (`--log`, `--depurar`), ruta real del `.exe`. **Seguridad:** tokens cifrados con DPAPI; los errores silenciados ahora dejan rastro (`diag.soft`). **Interfaz:** estados deshabilitados visibles, Configuración con búsqueda y secciones, tiempo compacto en Estadísticas, cabecera y título adaptables, enlaces con contraste AA, nombres accesibles, icono en todas las ventanas. **Rendimiento:** animaciones cacheadas (dock 8,2 % → 2,8 % de un núcleo medido por software), indicador sin temporizador con la ventana oculta. **Corregido:** `QCheckBox has been deleted` al cerrar Configuración en el `.exe`.
-- **1.3.0** (2026-10-29) — Visualizador más preciso y panel lateral con el espectro hacia afuera; Configuración que «no abría» (quedaba detrás de ventanas «siempre visibles»); reproducción «pegada» con Spotify (sesiones fantasma); letras que no aparecían; primera compilación con Nuitka; hilos de Python en lugar de `QThreadPool`.
-- **1.2.0** (2026-10-28) — Nombre nuevo **YefriPlayer** (antes WNP Player; migración automática de datos); visualizador de audio; registro de fallos nativos; revisión completa de controles (sin parpadeos al pulsar, barras que no rebotan, clic derecho ignorado); letras más corteses con lrclib; `.exe` en modo carpeta.
-- **1.1.0** (2026-10-26) — «Iniciar con Windows»; «Acerca de»; validación de `config.json`; casillas con palomita; asistente de bienvenida rehecho; correcciones de seguridad (escape de HTML en OAuth, fórmulas en el CSV).
-- **1.0.0** — Primera versión pública.
-
-## 11. Créditos, aviso legal y licencia
-
-- **Autor:** [YefriDev](https://github.com/Yeflix).
-- [pywnp](https://pypi.org/project/pywnp/) de keifufu (MIT) y la extensión [WebNowPlaying](https://wnp.keifufu.dev) · [PyQt6](https://www.riverbankcomputing.com/software/pyqt/) (GPL-3.0) · [aiohttp](https://github.com/aio-libs/aiohttp) · [winsdk](https://pypi.org/project/winsdk/) · [numpy](https://numpy.org) (BSD) y [PyAudioWPatch](https://pypi.org/project/PyAudioWPatch/) (Apache-2.0) · letras de [lrclib.net](https://lrclib.net).
-- **Aviso legal:** proyecto independiente, **sin afiliación ni respaldo** de Spotify, Google/YouTube, Last.fm, ListenBrainz ni WebNowPlaying. Los nombres y marcas pertenecen a sus dueños. Úsalo respetando los términos de cada servicio.
-- **Licencia:** **GNU GPL v3.0** (ver [`LICENSE`](LICENSE)), la compatible con PyQt6. Copyright © 2026 YefriDev.
+- Creado por **[YefriDev](https://github.com/Yeflix)**.
+- Se apoya en [pywnp](https://pypi.org/project/pywnp/) y la extensión [WebNowPlaying](https://wnp.keifufu.dev) de keifufu, [PyQt6](https://www.riverbankcomputing.com/software/pyqt/), [aiohttp](https://github.com/aio-libs/aiohttp), [winsdk](https://pypi.org/project/winsdk/), [numpy](https://numpy.org), [PyAudioWPatch](https://pypi.org/project/PyAudioWPatch/) y las letras de [lrclib.net](https://lrclib.net).
+- Proyecto independiente, **sin afiliación ni respaldo** de Spotify, Google/YouTube, Last.fm, ListenBrainz ni WebNowPlaying. Los nombres y marcas pertenecen a sus dueños.
+- Licencia **[GNU GPL v3.0](LICENSE)**. Copyright © 2026 YefriDev.

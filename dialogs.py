@@ -1260,7 +1260,7 @@ class SettingsDialog(_DialogBase):
     notificaciones, accesos a teclas multimedia e historial, scrobbling y
     enlaces de YouTube.
 
-    Con scroll interno (antes era un QVBoxLayout directo; ver README.md,
+    Con scroll interno (antes era un QVBoxLayout directo; ver docs/DESARROLLO.md,
     sección 7): entre las nuevas secciones de scrobbling y YouTube
     y lo que ya había, el contenido pasó a ser más largo de lo que entra
     cómodo en una ventana fija sin desbordarse — mismo patrón que ya usan

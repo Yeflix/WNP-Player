@@ -15,7 +15,7 @@ una proyección en perspectiva hecha a mano (`Camera`) o con QTransform.
 - `PageFlip`: cambio de paso como una tarjeta que gira, con profundidad.
 - `Confetti`: confeti con profundidad al terminar.
 
-Reglas de la casa (README, sección 7): todo va por reloj real
+Reglas de la casa (docs/DESARROLLO.md, sección 7): todo va por reloj real
 (time.monotonic), cada temporizador se para al ocultarse y no arranca oculto,
 y con «reducir movimiento» (theme.REDUCED_MOTION) se dibuja quieto.
 """

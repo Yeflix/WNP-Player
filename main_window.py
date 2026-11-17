@@ -1461,7 +1461,7 @@ class MainWindow(QWidget):
         # Se crea una instancia NUEVA cada vez que se abre el menú (cada
         # clic en el botón de engranaje) — sin esto quedaba viva para
         # siempre como hijo de la ventana, igual que pasaba con los
-        # diálogos antes de corregirlo (ver README.md, sección 7).
+        # diálogos antes de corregirlo (ver docs/DESARROLLO.md, sección 7).
         menu.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         compact_action = menu.addAction("Modo compacto")
         dock_action = menu.addAction("Panel lateral")

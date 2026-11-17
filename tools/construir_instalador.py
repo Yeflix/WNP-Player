@@ -184,7 +184,8 @@ def main(argv: list[str] | None = None) -> int:
           f"  {out.name} /VERYSILENT /SUPPRESSMSGBOXES /CURRENTUSER\n"
           "  (añade /TASKS=\"autofix\" para instalar también Spicetify AutoFix)")
     print(f"\nPara que las copias instaladas se actualicen solas: publica en GitHub una release\n"
-          f"con la etiqueta v{V.APP_VERSION} y adjunta {out.name} sin cambiarle el nombre.")
+          f"con la etiqueta v{V.APP_VERSION} y adjunta {out.name} sin cambiarle el nombre\n"
+          "(paso a paso en docs/PUBLICAR.md).")
     return 0
 
 
